@@ -1,146 +1,190 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Special Order — Instant Quote</title>
+  <title>Special Order – Instant Quote</title>
   <style>
-    /* Match Debut’s system/Helvetica feel */
-    :root{
-      --brand-green: #7bbf3b; /* tweak if you prefer a different green */
-      --text: #333;
-      --muted: #666;
-      --border: #e5e5e5;
-      --bg: transparent; /* keep transparent so it sits on the shop background */
+    /* Make the embed feel native to your theme */
+    :root { --accent: #2f7d32; --text: #333; }
+    html, body { margin:0; padding:0; background:transparent; color:var(--text); font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 0 16px 48px; }
+    h1 { font-size: 28px; margin: 16px 0 24px; font-weight: 700; text-align: left; }
+    .row { display:grid; grid-template-columns: 1fr; gap: 12px; margin-bottom: 24px; }
+    label { font-weight: 600; }
+    input[type="text"], input[type="email"], input[type="number"], textarea  {
+      width:100%; padding:10px; border:1px solid #d0d5dd; border-radius:6px; background:#fff;
     }
-
-    html, body {
-      height: 100%;
-    }
-    body {
-      margin: 0;
-      background: var(--bg);
-      color: var(--text);
-      font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI",
-            Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji","Segoe UI Emoji";
-    }
-
-    /* Full-width container that breathes but isn’t a “card” */
-    .wrap {
-      width: min(1100px, 92vw);
-      margin: 48px auto 72px;
-    }
-
-    h1 {
-      font-size: clamp(24px, 3vw, 32px);
-      margin: 0 0 20px;
-      letter-spacing: .2px;
-    }
-    p.lead {
-      margin: 0 0 28px;
-      color: var(--muted);
-    }
-
-    form {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 18px 20px;
-    }
-    @media (max-width: 720px){
-      form { grid-template-columns: 1fr; }
-    }
-
-    .field {
-      display: flex;
-      flex-direction: column;
-    }
-    .field.full { grid-column: 1 / -1; }
-
-    label {
-      font-weight: 600;
-      margin: 0 0 6px;
-    }
-    input, select, textarea {
-      appearance: none;
-      border: 1px solid var(--border);
-      border-radius: 6px;
-      padding: 12px 14px;
-      font: inherit;
-      width: 100%;
-      background: #fff;
-      transition: border-color .15s ease, box-shadow .15s ease;
-    }
-    input:focus, select:focus, textarea:focus {
-      outline: none;
-      border-color: var(--brand-green);
-      box-shadow: 0 0 0 3px rgba(123,191,59,.15);
-    }
-
-    .actions {
-      grid-column: 1 / -1;
-      display: flex;
-      gap: 12px;
-      align-items: center;
-      margin-top: 10px;
-    }
-
-    .btn {
-      appearance: none;
-      border: none;
-      border-radius: 999px;
-      padding: 12px 20px;
-      font-weight: 600;
-      cursor: pointer;
-      transition: transform .05s ease, box-shadow .15s ease, background .15s ease;
-    }
-    .btn.primary {
-      background: var(--brand-green);
-      color: #fff;
-      box-shadow: 0 6px 14px -6px rgba(123,191,59,.45);
-    }
-    .btn.primary:hover { filter: brightness(1.03); }
-    .btn:active { transform: translateY(1px); }
-
-    .fineprint { color: var(--muted); font-size: 13px; }
+    small { color:#6b7280; }
+    .pill { display:inline-flex; align-items:center; gap:8px; padding:8px 12px; border-radius:999px; background:#eef2ff; color:#3730a3; font-weight:600; font-size:13px; }
+    .btn { appearance:none; border:0; background:var(--accent); color:#fff; padding:12px 16px; border-radius:8px; font-weight:700; cursor:pointer; }
+    .btn.secondary { background:#111827; }
+    .btn.link { background:transparent; color:#111827; padding:0; }
+    .items { display:flex; flex-direction:column; gap:16px; }
+    .item { padding:16px; border:1px dashed #d0d5dd; border-radius:10px; background:#fff; }
+    .item h3 { margin:0 0 8px; font-size:16px; }
+    .two { display:grid; grid-template-columns: 1fr 1fr; gap:12px; }
+    .totals { margin: 8px 0 20px; font-size:18px; font-weight:700; }
+    .muted { color:#6b7280; font-weight:400; }
+    .hr { height:1px; background:#e5e7eb; margin: 16px 0; border:0; }
+    .note { font-size:13px; color:#6b7280; }
+    .inline { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+    .right { text-align:right; }
+    @media (max-width: 720px) { .two { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-  <main class="wrap" role="main" aria-labelledby="quote-title">
-    <h1 id="quote-title">Special Order — Instant Quote</h1>
-    <p class="lead">Tell us what you’re looking for. We’ll estimate price &amp; ETA fast.</p>
+  <main class="wrap">
+    <div class="pill">Special Order – Instant Quote</div>
+    <h1>Instant Import</h1>
 
-    <form id="quoteForm" onsubmit="event.preventDefault(); alert('Demo submit — wire this up next!');">
-      <div class="field">
-        <label for="name">Your name</label>
-        <input id="name" name="name" required />
+    <!-- Customer -->
+    <div class="row">
+      <div class="two">
+        <div>
+          <label>Your name</label>
+          <input id="custName" type="text" placeholder="Jane Doe" required />
+        </div>
+        <div>
+          <label>Email</label>
+          <input id="custEmail" type="email" placeholder="you@email.com" required />
+        </div>
       </div>
+      <small class="note">We’ll show a total landed cost instantly. You can then complete your order securely.</small>
+    </div>
 
-      <div class="field">
-        <label for="email">Email</label>
-        <input id="email" type="email" name="email" required />
+    <!-- Items -->
+    <div class="row">
+      <label>What do you want to import?</label>
+      <div class="items" id="items"></div>
+      <div class="inline">
+        <button class="btn link" id="addItem">+ Add another item</button>
+        <small class="note">Paste a product link. (Optional) include price and carton dimensions if known.</small>
       </div>
+    </div>
 
-      <div class="field">
-        <label for="phone">Phone (optional)</label>
-        <input id="phone" name="phone" />
-      </div>
+    <div class="hr"></div>
 
-      <div class="field">
-        <label for="budget">Budget (optional)</label>
-        <input id="budget" name="budget" placeholder="e.g., $300–$500" />
+    <!-- Totals -->
+    <div class="row">
+      <div class="totals">Total Landed Cost: <span id="landed" class="muted">$0.00</span></div>
+      <div class="inline">
+        <button class="btn" id="calc">Update Quote</button>
+        <button class="btn secondary" id="checkout" disabled>Complete Order</button>
       </div>
-
-      <div class="field full">
-        <label for="details">Product details</label>
-        <textarea id="details" name="details" rows="5"
-          placeholder="Brand, model, link(s), color/size, quantity…"></textarea>
-      </div>
-
-      <div class="actions">
-        <button class="btn primary" type="submit">Get instant estimate</button>
-        <span class="fineprint">We’ll follow up if we need anything else.</span>
-      </div>
-    </form>
+      <small class="note">Card fee (3.75%) is included in the landed cost. Destination assumed: 07201 (Elizabeth, NJ). Freight @ $6.46/ft³ + $10 fixed fee per item.</small>
+    </div>
   </main>
+
+  <script>
+    const itemsEl = document.getElementById('items');
+    const addItemBtn = document.getElementById('addItem');
+    const calcBtn = document.getElementById('calc');
+    const checkoutBtn = document.getElementById('checkout');
+    const landedEl = document.getElementById('landed');
+
+    function fmt(n){ return n.toLocaleString('en-US', { style:'currency', currency:'USD' }); }
+
+    function newItem(index) {
+      const wrap = document.createElement('div');
+      wrap.className = 'item';
+      wrap.innerHTML = `
+        <h3>Item <span class="muted">#${index+1}</span></h3>
+        <div class="row">
+          <label>Product link</label>
+          <input type="text" name="link" placeholder="https://www.amazon.com/..." required />
+        </div>
+        <div class="two">
+          <div>
+            <label>First cost (USD) <span class="muted">(optional – we’ll try to fetch)</span></label>
+            <input type="number" step="0.01" name="price" placeholder="e.g. 1299.99" />
+          </div>
+          <div>
+            <label>Quantity</label>
+            <input type="number" name="qty" value="1" min="1" />
+          </div>
+        </div>
+        <div class="two">
+          <div><label>Length (in)</label><input type="number" step="0.1" name="L" placeholder="e.g. 60"></div>
+          <div><label>Width (in)</label><input type="number" step="0.1" name="W" placeholder="e.g. 28"></div>
+        </div>
+        <div class="two">
+          <div><label>Height (in)</label><input type="number" step="0.1" name="H" placeholder="e.g. 18"></div>
+          <div class="right"><button class="btn link" type="button" data-remove>Remove</button></div>
+        </div>
+      `;
+      wrap.querySelector('[data-remove]').onclick = () => { wrap.remove(); renumber(); };
+      return wrap;
+    }
+
+    function renumber(){
+      [...itemsEl.children].forEach((el,i)=>{
+        el.querySelector('h3').innerHTML = `Item <span class="muted">#${i+1}</span>`;
+      });
+    }
+
+    addItemBtn.onclick = () => {
+      itemsEl.appendChild(newItem(itemsEl.children.length));
+      renumber();
+    };
+
+    // start with one row
+    addItemBtn.click();
+
+    async function collect() {
+      const name = document.getElementById('custName').value.trim();
+      const email = document.getElementById('custEmail').value.trim();
+      const items = [...itemsEl.children].map(el => {
+        const q = s => el.querySelector(s);
+        return {
+          link: q('input[name="link"]').value.trim(),
+          price: parseFloat(q('input[name="price"]').value || '0'),
+          qty: parseInt(q('input[name="qty"]').value || '1', 10),
+          L: parseFloat(q('input[name="L"]').value || '0'),
+          W: parseFloat(q('input[name="W"]').value || '0'),
+          H: parseFloat(q('input[name="H"]').value || '0'),
+        };
+      });
+      return { name, email, items };
+    }
+
+    async function updateQuote() {
+      const payload = await collect();
+      if (!payload.items.length || !payload.items[0].link) return;
+      const res = await fetch('/quote', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      landedEl.textContent = fmt(data.totalLanded || 0);
+      checkoutBtn.disabled = !(data && data.totalLanded > 0);
+      window.__LATEST_QUOTE__ = data; // keep for checkout
+    }
+
+    calcBtn.onclick = updateQuote;
+
+    checkoutBtn.onclick = async () => {
+      const payload = await collect();
+      const latest = window.__LATEST_QUOTE__;
+      const res = await fetch('/checkout', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ ...payload, quote: latest })
+      });
+      const data = await res.json();
+      if (data && data.checkoutUrl) {
+        window.location.href = data.checkoutUrl; // open Shopify invoice/checkout
+      } else {
+        alert('Sorry, we could not start checkout yet.');
+      }
+    };
+
+    // auto-calc after first item paste (light debounce)
+    let t;
+    itemsEl.addEventListener('input', ()=>{
+      clearTimeout(t); t = setTimeout(updateQuote, 400);
+    });
+  </script>
 </body>
 </html>
