@@ -5,37 +5,23 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Special Order – Instant Quote</title>
   <style>
-    :root { --accent: #2c7a3f; --text: #333; --muted: #6b7280; --border:#d0d5dd; --bg:#fff; }
-    html, body { margin:0; padding:0; background:transparent; color:var(--text); font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
-    *, *::before, *::after { box-sizing: border-box; }
-    .wrap { max-width: 980px; margin: 0 auto; padding: 16px 20px 28px; }
-    h1 { font-size: 28px; margin: 16px 0 24px; font-weight: 700; }
-    form { display:grid; grid-template-columns: 1fr; gap: 14px; }
+    :root { --accent:#2c7a3f; --text:#333; --muted:#6b7280; --border:#d0d5dd; --bg:#fff; }
+    html, body { margin:0; padding:0; background:transparent; color:var(--text); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
+    *, *:before, *:after { box-sizing:border-box; }
+    .wrap { max-width:960px; margin:40px auto; padding:24px; }
+    h1 { font-size:24px; margin:0 0 24px; font-weight:700; text-align:center; }
+    form { display:grid; gap:16px; }
     label { font-weight:600; font-size:14px; color:#111827; }
-    input[type="text"], input[type="email"], input[type="url"], input[type="number"] {
-      width:100%; height:44px; padding:0 12px; border:1px solid var(--border);
-      border-radius:6px; background:#fff; color:var(--text); outline:none;
-    }
-    input:focus { border-color:#0ea5e9; box-shadow:0 0 0 3px rgba(14,165,233,.2); }
-    .row { display:grid; grid-template-columns: 1fr; gap: 12px; }
-    .inline-3 { display:grid; grid-template-columns: 2fr 1fr 1fr; gap:12px; }
-    .muted { color:var(--muted); font-size:12px; }
-    .btn {
-      height:46px; border:none; border-radius:6px; background:var(--accent); color:#fff;
-      font-weight:700; cursor:pointer; display:inline-flex; align-items:center; justify-content:center;
-    }
-    .btn:disabled { opacity:.6; cursor:default; }
-    .note { font-size:12px; margin-top:4px; color:var(--muted); }
-    .result {
-      margin-top:18px; border:1px solid var(--border); background:var(--bg);
-      border-radius:8px; padding:14px;
-    }
-    .result h3 { margin:0 0 10px; font-size:18px; }
-    .result table { width:100%; border-collapse: collapse; }
+    input, select { width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:6px; background:#fff; color:var(--text); outline:none; }
+    input:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(44,122,63,.2); }
+    button { height:46px; border:none; border-radius:8px; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; }
+    button:disabled { opacity:.6; cursor:default; }
+    .hint { font-size:12px; color:var(--muted); margin-top:-6px; }
+    .result { margin-top:24px; padding:16px; border:1px solid var(--border); border-radius:8px; background:#f9fafb; }
+    .result h2 { margin:0 0 12px; font-size:18px; }
+    .result table { width:100%; border-collapse:collapse; }
     .result td { padding:6px 0; }
     .result td:last-child { text-align:right; }
-    .right { text-align:right; }
-    @media (max-width: 720px) { .inline-3 { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
@@ -43,91 +29,118 @@
     <h1>Special Order – Instant Quote</h1>
 
     <form id="quoteForm">
-      <div class="row">
-        <div>
-          <label>Your name</label>
-          <input id="name" type="text" autocomplete="name" placeholder="Your name" />
-        </div>
-        <div>
-          <label>Email</label>
-          <input id="email" type="email" autocomplete="email" placeholder="you@example.com" />
-        </div>
-      </div>
+      <label>Item link (Amazon, Wayfair, etc.)
+        <input type="url" id="link" required placeholder="https://example.com/product" />
+      </label>
+      <div class="hint">Amazon/Wayfair treated as tax-exempt (your rule). Others charged 6.625% NJ sales tax.</div>
 
-      <div class="inline-3">
-        <div>
-          <label>Item link (Amazon, Wayfair, etc.)</label>
-          <input id="url0" type="url" placeholder="https://…" />
-          <div class="note">Paste the product URL. Tax auto-rules: Amazon/Wayfair are tax-exempt per your settings.</div>
-        </div>
-        <div>
-          <label>Price USD</label>
-          <input id="price0" type="number" min="0" step="0.01" placeholder="e.g. 249.99" />
-        </div>
-        <div>
-          <label>Cubic ft</label>
-          <input id="cf0" type="number" min="0" step="0.01" placeholder="e.g. 4.5" />
-        </div>
-      </div>
+      <label>Category
+        <select id="category" required>
+          <option value="">Select…</option>
+          <option value="upholstered">Upholstered furniture (25% duty)</option>
+          <option value="other">Other (0% duty by default)</option>
+        </select>
+      </label>
 
-      <button class="btn" id="goBtn" type="submit">Get Quote</button>
-      <div class="muted">Tip: price & cubic ft help us calculate now. We’ll add automatic price & size lookup next.</div>
+      <label>First cost per unit (USD)
+        <input type="number" id="cost" step="0.01" min="0" required placeholder="e.g. 550" />
+      </label>
+
+      <label>Carton volume per unit (ft³)
+        <input type="number" id="volume" step="0.01" min="0" placeholder="Leave blank to use 11.33 ft³" />
+      </label>
+
+      <label>Quantity
+        <input type="number" id="qty" min="1" value="1" />
+      </label>
+
+      <button type="submit" id="goBtn">Get Quote</button>
     </form>
 
-    <div id="result" class="result" style="display:none;"></div>
+    <div id="output" class="result" style="display:none;">
+      <h2>Quote Result</h2>
+      <div id="quoteTable"></div>
+      <div class="hint">Includes US tax (if applicable), freight, fixed fees, duty, wharfage (2%), margin, and card fee 3.25%. Duty applied to first cost only.</div>
+    </div>
   </div>
 
   <script>
-    const form = document.getElementById('quoteForm');
-    const goBtn = document.getElementById('goBtn');
-    const out = document.getElementById('result');
+    const fmt = n => `$${Number(n).toFixed(2)}`;
 
-    form.addEventListener('submit', async (e) => {
+    document.getElementById("quoteForm").addEventListener("submit", function(e){
       e.preventDefault();
-      goBtn.disabled = true;
+      const btn = document.getElementById("goBtn");
+      btn.disabled = true;
 
-      const payload = {
-        name: document.getElementById('name').value.trim(),
-        email: document.getElementById('email').value.trim(),
-        items: [{
-          url: document.getElementById('url0').value.trim(),
-          priceUSD: parseFloat(document.getElementById('price0').value || '0'),
-          cubicFt: parseFloat(document.getElementById('cf0').value || '0')
-        }]
-      };
+      const link = (document.getElementById("link").value || "").trim();
+      const cost = parseFloat(document.getElementById("cost").value);
+      const qty = parseInt(document.getElementById("qty").value) || 1;
+      const volPerUnit = parseFloat(document.getElementById("volume").value) || 11.33;
+      const category = document.getElementById("category").value;
 
-      try {
-        const res = await fetch('/quote', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        if (!res.ok) throw new Error('Request failed: ' + res.status);
-        const data = await res.json();
+      // --- Core assumptions from your saved workflow ---
+      const taxRate = /(amazon|wayfair)\./i.test(link) ? 0 : 0.06625;           // 6.625% unless tax-exempt vendor
+      const freightRate = 16.17;                                                // $/ft³ (FFF Aug 2025 LCL reference)
+      const fixedFeesTotal = 148;                                               // per-shipment, allocated per unit
+      const dutyRate = category === "upholstered" ? 0.25 : 0.00;                // duty on first cost only
+      const wharfageRate = 0.02;                                                // 2% (your request to include wharfage)
+      const cardFeeRate = 0.0325;                                               // 3.25%
 
-        // Render quick summary
-        const r = data.summary;
-        out.style.display = 'block';
-        out.innerHTML = `
-          <h3>Quote Summary</h3>
-          <table>
-            <tr><td>Items</td><td class="right">${r.items}</td></tr>
-            <tr><td>First cost</td><td class="right">$${r.firstCost.toFixed(2)}</td></tr>
-            <tr><td>Sales tax</td><td class="right">$${r.salesTax.toFixed(2)}</td></tr>
-            <tr><td>Duty (25%)</td><td class="right">$${r.duty.toFixed(2)}</td></tr>
-            <tr><td>Wharfage (2%)</td><td class="right">$${r.wharfage.toFixed(2)}</td></tr>
-            <tr><td>Freight & Handling</td><td class="right">$${r.freight.toFixed(2)}</td></tr>
-            <tr><td>Card fee (3.75%)</td><td class="right">$${r.cardFee.toFixed(2)}</td></tr>
-            <tr><td><strong>Total Landed</strong></td><td class="right"><strong>$${r.totalLanded.toFixed(2)}</strong></td></tr>
-            <tr><td>Suggested retail (margin ${r.marginPct}%)</td><td class="right">$${r.suggestedRetail.toFixed(2)}</td></tr>
-          </table>
-        `;
-      } catch (err) {
-        out.style.display = 'block';
-        out.innerHTML = `<div style="color:#b91c1c">Error: ${err.message}</div>`;
-      } finally {
-        goBtn.disabled = false;
-      }
+      // Dynamic margin tiers + value caps
+      const totalVol = volPerUnit * qty;
+      const baseMargin =
+        totalVol < 10 ? 0.40 :
+        totalVol < 20 ? 0.30 :
+        totalVol < 50 ? 0.25 : 0.20;
+
+      // --- Per-unit build ---
+      const usTax = cost * taxRate;                                             // tax on first cost
+      const freightPerUnit = (volPerUnit * freightRate);                        // simple LCL estimate
+      const fixedFeesPerUnit = fixedFeesTotal / qty;
+      const duty = cost * dutyRate;                                             // duty on first cost only
+      const wharfage = cost * wharfageRate;                                     // wharfage set at 2% of first cost
+
+      const landed = cost + usTax + freightPerUnit + fixedFeesPerUnit + duty + wharfage;
+
+      // Margin caps by landed value
+      let margin = baseMargin;
+      if (landed > 1000) margin = Math.min(margin, 0.25);
+      if (landed > 3000) margin = Math.min(margin, 0.20);
+      if (landed > 5000) margin = Math.min(margin, 0.15);
+
+      // Retail: add margin, then card fee, then round to *.95
+      let retail = landed * (1 + margin);
+      retail *= (1 + cardFeeRate);
+      retail = Math.round(retail) - 0.05;
+
+      const totalRetail = retail * qty;
+
+      // Render table
+      const rows = [
+        ["Source", `<a href="${link}" target="_blank" rel="noopener noreferrer">${link || "-"}</a>`],
+        ["Qty", qty],
+        ["Total volume", `${(volPerUnit * qty).toFixed(2)} ft³`],
+        ["First cost (per unit)", fmt(cost)],
+        ["US sales tax", fmt(usTax)],
+        ["Duty", fmt(duty)],
+        ["Wharfage (2%)", fmt(wharfage)],
+        ["Freight (per unit)", fmt(freightPerUnit)],
+        ["Fixed fees (per unit)", fmt(fixedFeesPerUnit)],
+        ["Landed (per unit)", `<strong>${fmt(landed)}</strong>`],
+        ["Margin applied", `${Math.round(margin*100)}%`],
+        ["Retail (per unit)", `<strong>${fmt(retail)}</strong>`],
+        ["Total retail", `<strong>${fmt(totalRetail)}</strong>`],
+      ];
+
+      const html = `
+        <table>
+          ${rows.map(r => `<tr><td>${r[0]}</td><td style="text-align:right">${r[1]}</td></tr>`).join("")}
+        </table>
+      `;
+
+      document.getElementById("quoteTable").innerHTML = html;
+      document.getElementById("output").style.display = "block";
+      btn.disabled = false;
     });
   </script>
 </body>
