@@ -9,7 +9,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(express.json({ limit: "1mb" }));
 
-// Serve static files, but NEVER cache HTML
+// Serve static files; never cache HTML
 app.use(
   express.static(path.join(__dirname, "public"), {
     setHeaders: (res, filePath) => {
@@ -37,7 +37,7 @@ app.get("/", (_req, res) => {
 // Healthcheck
 app.get("/health", (_req, res) => res.status(200).send("OK"));
 
-// DEBUG: show the exact index.html bytes on disk
+// DEBUG: dump current index.html bytes on disk
 app.get("/debug-index", (_req, res) => {
   try {
     const html = fs.readFileSync(path.join(__dirname, "public", "index.html"), "utf8");
@@ -51,9 +51,7 @@ app.get("/debug-index", (_req, res) => {
 app.post("/scrape", async (req, res) => {
   try {
     const { url } = req.body || {};
-    if (!url || !/^https?:\/\//i.test(url)) {
-      return res.status(400).json({ error: "Invalid URL" });
-    }
+    if (!url || !/^https?:\/\//i.test(url)) return res.status(400).json({ error: "Invalid URL" });
 
     const resp = await fetch(url, {
       headers: {
@@ -118,14 +116,12 @@ function extractCubicFt($, html) {
   if (dimMatch) {
     const [Lr, Wr, Hr] = dimMatch.slice(1, 4).map(s => s.toLowerCase());
     const L = toInches(Lr), W = toInches(Wr), H = toInches(Hr);
-    if ([L, W, H].every(x => isFinite(x) && x > 0)) {
-      return (L * W * H) / 1728;
-    }
+    if ([L, W, H].every(x => isFinite(x) && x > 0)) return (L * W * H) / 1728;
   }
   return NaN;
 }
 
-function parseMoney(s){ if(!s) return NaN; const m = String(s).replace(/[, ]/g,"").match(/\$?([0-9]+(?:\.[0-9]{2})?)/); return m ? parseFloat(m[1]) : NaN; }
+function parseMoney(s){ if(!s) return NaN; const m=String(s).replace(/[, ]/g,"").match(/\$?([0-9]+(?:\.[0-9]{2})?)/); return m?parseFloat(m[1]):NaN; }
 function toInches(val){ const n=parseFloat(val); if(!isFinite(n)) return NaN; if(/cm/.test(val)) return n/2.54; if(/mm/.test(val)) return n/25.4; return n; }
 function findFirstMatch(text,re){ const m=re.exec(text); return m ? (m[2]||m[1]) : null; }
 function findNear(text, anchorRe, valueRe){ const a=anchorRe.exec(text); if(!a) return null; const start=Math.max(0,a.index-800); const end=Math.min(text.length,a.index+1200); const win=text.slice(start,end); const v=valueRe.exec(win); return v ? v[0] : null; }
