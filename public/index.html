@@ -88,23 +88,20 @@
         // ignore; we’ll fall back below
       }
 
-      // Fallbacks
       if (!priceUSD) note += "Couldn’t auto-read price. ";
       if (!cubicFt) note += "Couldn’t auto-read dimensions; used default 11.33 ft³ per unit. ";
       if (!cubicFt) cubicFt = 11.33;
 
-      // --- Pricing rules (from your saved workflow) ---
-      const taxRate = /(amazon|wayfair)\./i.test(link) ? 0 : 0.06625; // 6.625% unless exempt
-      const freightRate = 16.17;                                      // $/ft³ (FFF Aug 2025, LCL)
-      const fixedFeesTotal = 148;                                     // per-shipment
-      const dutyRate = category === "upholstered" ? 0.25 : 0.00;      // duty on first cost only
-      const wharfageRate = 0.02;                                      // 2%
-      const cardFeeRate = 0.0325;                                     // 3.25%
+      const taxRate = /(amazon|wayfair)\./i.test(link) ? 0 : 0.06625;
+      const freightRate = 16.17;
+      const fixedFeesTotal = 148;
+      const dutyRate = category === "upholstered" ? 0.25 : 0.00;
+      const wharfageRate = 0.02;
+      const cardFeeRate = 0.0325;
 
       const volPerUnit = cubicFt;
       const totalVol = volPerUnit * qty;
 
-      // margin tiers
       let margin =
         totalVol < 10 ? 0.40 :
         totalVol < 20 ? 0.30 :
@@ -118,7 +115,6 @@
 
       const landed = (priceUSD || 0) + usTax + freightPerUnit + fixedFeesPerUnit + duty + wharfage;
 
-      // margin caps by landed value
       if (landed > 1000) margin = Math.min(margin, 0.25);
       if (landed > 3000) margin = Math.min(margin, 0.20);
       if (landed > 5000) margin = Math.min(margin, 0.15);
