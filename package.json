@@ -1,14 +1,7 @@
 {
   "name": "so-quote",
   "private": true,
-  "scripts": {
-    "start": "node index.js"
-  },
-  "engines": {
-    "node": ">=18"
-  },
-  "dependencies": {
-    "express": "^4.19.2",
-    "cheerio": "^1.0.0"
-  }
+  "scripts": { "start": "node index.js" },
+  "engines": { "node": ">=18" },
+  "dependencies": { "express": "^4.19.2" }
 }
