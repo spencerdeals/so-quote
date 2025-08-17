@@ -5,153 +5,47 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Special Order – Instant Quote</title>
   <style>
-    :root { --accent:#2c7a3f; --text:#333; --muted:#6b7280; --border:#d0d5dd; --bg:#fff; }
-    html, body { margin:0; padding:0; background:transparent; color:var(--text); font:16px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif; }
-    *, *:before, *:after { box-sizing:border-box; }
-    .wrap { max-width:960px; margin:40px auto; padding:24px; }
-    h1 { font-size:24px; margin:0 0 24px; font-weight:700; text-align:center; }
-    form { display:grid; gap:16px; }
-    label { font-weight:600; font-size:14px; color:#111827; }
-    input, select { width:100%; padding:10px 12px; border:1px solid var(--border); border-radius:6px; background:#fff; color:var(--text); outline:none; }
-    input:focus, select:focus { border-color:var(--accent); box-shadow:0 0 0 3px rgba(44,122,63,.2); }
-    button { height:46px; border:none; border-radius:8px; background:var(--accent); color:#fff; font-weight:700; cursor:pointer; }
-    button:disabled { opacity:.6; cursor:default; }
-    .hint { font-size:12px; color:var(--muted); margin-top:-6px; }
-    .result { margin-top:24px; padding:16px; border:1px solid var(--border); border-radius:8px; background:#f9fafb; }
-    .result h2 { margin:0 0 12px; font-size:18px; }
-    .result table { width:100%; border-collapse:collapse; }
-    .result td { padding:6px 0; }
-    .result td:last-child { text-align:right; }
-    .warn { color:#b45309; }
+    body { font-family: Arial, sans-serif; background:#fff; margin:0; padding:2rem; color:#333; }
+    h1 { font-size:1.8rem; margin-bottom:1rem; }
+    form { max-width:600px; margin:auto; }
+    label { display:block; margin:1rem 0 0.3rem; font-weight:600; }
+    input, select, textarea, button {
+      width:100%; padding:0.6rem; font-size:1rem; border:1px solid #ccc; border-radius:6px;
+    }
+    button {
+      background:#2c7a3f; color:#fff; border:none; margin-top:1.2rem; cursor:pointer; font-size:1.1rem;
+    }
+    button:hover { background:#256b36; }
+    .tip { margin-top:1rem; font-size:0.9rem; color:#666; text-align:center; }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <h1>Special Order – Instant Quote</h1>
+  <h1>Special Order – Instant Quote</h1>
+  <form id="quoteForm">
+    <label for="name">Your name</label>
+    <input type="text" id="name" name="name" placeholder="Your name" required />
 
-    <form id="quoteForm">
-      <label>Item link (Amazon, Wayfair, etc.)
-        <input type="url" id="link" required placeholder="https://example.com/product" />
-      </label>
-      <div class="hint">Price & cubic feet will auto-fill from the product page.</div>
+    <label for="email">Email</label>
+    <input type="email" id="email" name="email" placeholder="you@example.com" required />
 
-      <label>Category
-        <select id="category" required>
-          <option value="">Select…</option>
-          <option value="upholstered">Upholstered furniture (25% duty)</option>
-          <option value="other">Other (0% duty by default)</option>
-        </select>
-      </label>
+    <label for="link">Item link (Amazon, Wayfair, etc.)</label>
+    <input type="url" id="link" name="link" placeholder="https://…" required />
 
-      <label>Quantity
-        <input type="number" id="qty" min="1" value="1" />
-      </label>
+    <label for="category">Category</label>
+    <select id="category" name="category" required>
+      <option value="">Select a category</option>
+      <option value="upholstered">Upholstered Furniture</option>
+      <option value="other">Other Furniture</option>
+    </select>
 
-      <button type="submit" id="goBtn">Get Quote</button>
-      <div id="fallback" class="hint" style="display:none;"></div>
-    </form>
+    <label for="quantity">Quantity</label>
+    <input type="number" id="quantity" name="quantity" value="1" min="1" required />
 
-    <div id="output" class="result" style="display:none;">
-      <h2>Quote Result</h2>
-      <div id="quoteTable"></div>
-      <div class="hint">Includes US tax (if applicable), freight, fixed fees, duty, wharfage (2%), margin, and card fee 3.25%. Duty applied to first cost only.</div>
-    </div>
+    <button type="submit">Get Quote</button>
+  </form>
+
+  <div class="tip">
+    Paste the product URL above. Our system will automatically fetch price & cubic ft.
   </div>
-
-  <script>
-    const fmt = n => `$${Number(n).toFixed(2)}`;
-
-    async function scrape(url) {
-      const r = await fetch("/scrape", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url })
-      });
-      if (!r.ok) throw new Error("Scrape failed");
-      return r.json();
-    }
-
-    document.getElementById("quoteForm").addEventListener("submit", async (e) => {
-      e.preventDefault();
-      const btn = document.getElementById("goBtn");
-      btn.disabled = true;
-      const link = (document.getElementById("link").value || "").trim();
-      const qty = parseInt(document.getElementById("qty").value) || 1;
-      const category = document.getElementById("category").value;
-
-      let priceUSD = null, cubicFt = null, note = "";
-      try {
-        const s = await scrape(link);
-        priceUSD = s.priceUSD ?? null;
-        cubicFt = s.cubicFt ?? null;
-      } catch (_) {
-        // ignore; we’ll fall back below
-      }
-
-      if (!priceUSD) note += "Couldn’t auto-read price. ";
-      if (!cubicFt) note += "Couldn’t auto-read dimensions; used default 11.33 ft³ per unit. ";
-      if (!cubicFt) cubicFt = 11.33;
-
-      const taxRate = /(amazon|wayfair)\./i.test(link) ? 0 : 0.06625;
-      const freightRate = 16.17;
-      const fixedFeesTotal = 148;
-      const dutyRate = category === "upholstered" ? 0.25 : 0.00;
-      const wharfageRate = 0.02;
-      const cardFeeRate = 0.0325;
-
-      const volPerUnit = cubicFt;
-      const totalVol = volPerUnit * qty;
-
-      let margin =
-        totalVol < 10 ? 0.40 :
-        totalVol < 20 ? 0.30 :
-        totalVol < 50 ? 0.25 : 0.20;
-
-      const usTax = (priceUSD || 0) * taxRate;
-      const freightPerUnit = volPerUnit * freightRate;
-      const fixedFeesPerUnit = fixedFeesTotal / qty;
-      const duty = (priceUSD || 0) * dutyRate;
-      const wharfage = (priceUSD || 0) * wharfageRate;
-
-      const landed = (priceUSD || 0) + usTax + freightPerUnit + fixedFeesPerUnit + duty + wharfage;
-
-      if (landed > 1000) margin = Math.min(margin, 0.25);
-      if (landed > 3000) margin = Math.min(margin, 0.20);
-      if (landed > 5000) margin = Math.min(margin, 0.15);
-
-      let retail = landed * (1 + margin);
-      retail *= (1 + cardFeeRate);
-      retail = Math.round(retail) - 0.05;
-
-      const totalRetail = retail * qty;
-
-      const rows = [
-        ["Source", `<a href="${link}" target="_blank" rel="noopener noreferrer">${link || "-"}</a>`],
-        ["Qty", qty],
-        ["Auto price (per unit)", priceUSD ? fmt(priceUSD) : `<span class="warn">Not found</span>`],
-        ["Auto volume (per unit)", volPerUnit ? `${volPerUnit.toFixed(2)} ft³` : `<span class="warn">Not found</span>`],
-        ["Total volume", `${totalVol.toFixed(2)} ft³`],
-        ["US sales tax", fmt(usTax)],
-        ["Duty", fmt(duty)],
-        ["Wharfage (2%)", fmt(wharfage)],
-        ["Freight (per unit)", fmt(freightPerUnit)],
-        ["Fixed fees (per unit)", fmt(fixedFeesPerUnit)],
-        ["Landed (per unit)", `<strong>${fmt(landed)}</strong>`],
-        ["Margin applied", `${Math.round(margin*100)}%`],
-        ["Retail (per unit)", `<strong>${fmt(retail)}</strong>`],
-        ["Total retail", `<strong>${fmt(totalRetail)}</strong>`],
-      ];
-
-      document.getElementById("quoteTable").innerHTML =
-        `<table>${rows.map(r => `<tr><td>${r[0]}</td><td style="text-align:right">${r[1]}</td></tr>`).join("")}</table>`;
-
-      const fb = document.getElementById("fallback");
-      if (note) { fb.textContent = note; fb.style.display = "block"; }
-      else { fb.style.display = "none"; }
-
-      document.getElementById("output").style.display = "block";
-      btn.disabled = false;
-    });
-  </script>
 </body>
 </html>
