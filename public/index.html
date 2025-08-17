@@ -22,6 +22,7 @@
     .result table { width:100%; border-collapse:collapse; }
     .result td { padding:6px 0; }
     .result td:last-child { text-align:right; }
+    .warn { color:#b45309; }
   </style>
 </head>
 <body>
@@ -32,7 +33,7 @@
       <label>Item link (Amazon, Wayfair, etc.)
         <input type="url" id="link" required placeholder="https://example.com/product" />
       </label>
-      <div class="hint">Amazon/Wayfair treated as tax-exempt (your rule). Others charged 6.625% NJ sales tax.</div>
+      <div class="hint">Price & cubic feet will auto-fill from the product page.</div>
 
       <label>Category
         <select id="category" required>
@@ -42,19 +43,12 @@
         </select>
       </label>
 
-      <label>First cost per unit (USD)
-        <input type="number" id="cost" step="0.01" min="0" required placeholder="e.g. 550" />
-      </label>
-
-      <label>Carton volume per unit (ft³)
-        <input type="number" id="volume" step="0.01" min="0" placeholder="Leave blank to use 11.33 ft³" />
-      </label>
-
       <label>Quantity
         <input type="number" id="qty" min="1" value="1" />
       </label>
 
       <button type="submit" id="goBtn">Get Quote</button>
+      <div id="fallback" class="hint" style="display:none;"></div>
     </form>
 
     <div id="output" class="result" style="display:none;">
@@ -67,60 +61,80 @@
   <script>
     const fmt = n => `$${Number(n).toFixed(2)}`;
 
-    document.getElementById("quoteForm").addEventListener("submit", function(e){
+    async function scrape(url) {
+      const r = await fetch("/scrape", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url })
+      });
+      if (!r.ok) throw new Error("Scrape failed");
+      return r.json();
+    }
+
+    document.getElementById("quoteForm").addEventListener("submit", async (e) => {
       e.preventDefault();
       const btn = document.getElementById("goBtn");
       btn.disabled = true;
-
       const link = (document.getElementById("link").value || "").trim();
-      const cost = parseFloat(document.getElementById("cost").value);
       const qty = parseInt(document.getElementById("qty").value) || 1;
-      const volPerUnit = parseFloat(document.getElementById("volume").value) || 11.33;
       const category = document.getElementById("category").value;
 
-      // --- Core assumptions from your saved workflow ---
-      const taxRate = /(amazon|wayfair)\./i.test(link) ? 0 : 0.06625;           // 6.625% unless tax-exempt vendor
-      const freightRate = 16.17;                                                // $/ft³ (FFF Aug 2025 LCL reference)
-      const fixedFeesTotal = 148;                                               // per-shipment, allocated per unit
-      const dutyRate = category === "upholstered" ? 0.25 : 0.00;                // duty on first cost only
-      const wharfageRate = 0.02;                                                // 2% (your request to include wharfage)
-      const cardFeeRate = 0.0325;                                               // 3.25%
+      let priceUSD = null, cubicFt = null, note = "";
+      try {
+        const s = await scrape(link);
+        priceUSD = s.priceUSD ?? null;
+        cubicFt = s.cubicFt ?? null;
+      } catch (_) {
+        // ignore; we’ll fall back below
+      }
 
-      // Dynamic margin tiers + value caps
+      // Fallbacks
+      if (!priceUSD) note += "Couldn’t auto-read price. ";
+      if (!cubicFt) note += "Couldn’t auto-read dimensions; used default 11.33 ft³ per unit. ";
+      if (!cubicFt) cubicFt = 11.33;
+
+      // --- Pricing rules (from your saved workflow) ---
+      const taxRate = /(amazon|wayfair)\./i.test(link) ? 0 : 0.06625; // 6.625% unless exempt
+      const freightRate = 16.17;                                      // $/ft³ (FFF Aug 2025, LCL)
+      const fixedFeesTotal = 148;                                     // per-shipment
+      const dutyRate = category === "upholstered" ? 0.25 : 0.00;      // duty on first cost only
+      const wharfageRate = 0.02;                                      // 2%
+      const cardFeeRate = 0.0325;                                     // 3.25%
+
+      const volPerUnit = cubicFt;
       const totalVol = volPerUnit * qty;
-      const baseMargin =
+
+      // margin tiers
+      let margin =
         totalVol < 10 ? 0.40 :
         totalVol < 20 ? 0.30 :
         totalVol < 50 ? 0.25 : 0.20;
 
-      // --- Per-unit build ---
-      const usTax = cost * taxRate;                                             // tax on first cost
-      const freightPerUnit = (volPerUnit * freightRate);                        // simple LCL estimate
+      const usTax = (priceUSD || 0) * taxRate;
+      const freightPerUnit = volPerUnit * freightRate;
       const fixedFeesPerUnit = fixedFeesTotal / qty;
-      const duty = cost * dutyRate;                                             // duty on first cost only
-      const wharfage = cost * wharfageRate;                                     // wharfage set at 2% of first cost
+      const duty = (priceUSD || 0) * dutyRate;
+      const wharfage = (priceUSD || 0) * wharfageRate;
 
-      const landed = cost + usTax + freightPerUnit + fixedFeesPerUnit + duty + wharfage;
+      const landed = (priceUSD || 0) + usTax + freightPerUnit + fixedFeesPerUnit + duty + wharfage;
 
-      // Margin caps by landed value
-      let margin = baseMargin;
+      // margin caps by landed value
       if (landed > 1000) margin = Math.min(margin, 0.25);
       if (landed > 3000) margin = Math.min(margin, 0.20);
       if (landed > 5000) margin = Math.min(margin, 0.15);
 
-      // Retail: add margin, then card fee, then round to *.95
       let retail = landed * (1 + margin);
       retail *= (1 + cardFeeRate);
       retail = Math.round(retail) - 0.05;
 
       const totalRetail = retail * qty;
 
-      // Render table
       const rows = [
         ["Source", `<a href="${link}" target="_blank" rel="noopener noreferrer">${link || "-"}</a>`],
         ["Qty", qty],
-        ["Total volume", `${(volPerUnit * qty).toFixed(2)} ft³`],
-        ["First cost (per unit)", fmt(cost)],
+        ["Auto price (per unit)", priceUSD ? fmt(priceUSD) : `<span class="warn">Not found</span>`],
+        ["Auto volume (per unit)", volPerUnit ? `${volPerUnit.toFixed(2)} ft³` : `<span class="warn">Not found</span>`],
+        ["Total volume", `${totalVol.toFixed(2)} ft³`],
         ["US sales tax", fmt(usTax)],
         ["Duty", fmt(duty)],
         ["Wharfage (2%)", fmt(wharfage)],
@@ -132,13 +146,13 @@
         ["Total retail", `<strong>${fmt(totalRetail)}</strong>`],
       ];
 
-      const html = `
-        <table>
-          ${rows.map(r => `<tr><td>${r[0]}</td><td style="text-align:right">${r[1]}</td></tr>`).join("")}
-        </table>
-      `;
+      document.getElementById("quoteTable").innerHTML =
+        `<table>${rows.map(r => `<tr><td>${r[0]}</td><td style="text-align:right">${r[1]}</td></tr>`).join("")}</table>`;
 
-      document.getElementById("quoteTable").innerHTML = html;
+      const fb = document.getElementById("fallback");
+      if (note) { fb.textContent = note; fb.style.display = "block"; }
+      else { fb.style.display = "none"; }
+
       document.getElementById("output").style.display = "block";
       btn.disabled = false;
     });
