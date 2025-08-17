@@ -5,228 +5,130 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Special Order – Instant Quote</title>
   <style>
-    :root {
-      --accent:#1e7d32; --text:#333; --muted:#6b7280; --bg:#fff;
-      --input:#d0d5dd; --border:#e5e7eb;
+    :root { --accent: #2c7a3f; --text: #333; --muted: #6b7280; --border:#d0d5dd; --bg:#fff; }
+    html, body { margin:0; padding:0; background:transparent; color:var(--text); font: 16px/1.45 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif; }
+    *, *::before, *::after { box-sizing: border-box; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 16px 20px 28px; }
+    h1 { font-size: 28px; margin: 16px 0 24px; font-weight: 700; }
+    form { display:grid; grid-template-columns: 1fr; gap: 14px; }
+    label { font-weight:600; font-size:14px; color:#111827; }
+    input[type="text"], input[type="email"], input[type="url"], input[type="number"] {
+      width:100%; height:44px; padding:0 12px; border:1px solid var(--border);
+      border-radius:6px; background:#fff; color:var(--text); outline:none;
     }
-    html, body { margin:0; padding:0; background:transparent; color:var(--text); font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
-    .wrap { max-width: 980px; margin: 0 auto; padding: 16px 20px 64px; }
-    h1 { font-size: 28px; margin: 16px 0 24px; font-weight: 700; text-align: left; }
-    form { display: grid; gap: 14px; }
-    label { font-weight: 600; display:block; margin-bottom: 6px; }
-    input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border:1px solid var(--input); border-radius: 6px; background:#fff; }
-    input:focus, select:focus, textarea:focus { outline: none; border-color:#0d9488; box-shadow: 0 0 0 3px rgba(13,148,136,.15); }
-    .grid { display:grid; gap:12px; }
-    .row { display:grid; grid-template-columns: 140px 1fr 140px 120px auto; gap:10px; align-items:center; }
-    .row .del { justify-self: end; }
-    .hint { color: var(--muted); font-size: 12px; }
-    .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 14px; border:none; border-radius:8px; cursor:pointer; font-weight:600; }
-    .btn.primary { background: var(--accent); color: #fff; }
-    .btn.secondary { background: #eef2ff; color:#1f2937; }
-    .btn.link { background:transparent; color:var(--accent); padding:4px 8px; }
-    .actions { display:flex; gap:12px; align-items:center; }
-    .items { display:grid; gap:12px; }
-    .card { border:1px solid var(--border); border-radius:10px; background:#fff; padding:14px; }
-    .totals { margin-top: 20px; border-top:1px dashed var(--border); padding-top: 16px; }
-    table { width:100%; border-collapse: collapse; margin-top:10px; }
-    th, td { text-align:left; padding:8px 6px; border-bottom: 1px solid var(--border); font-size:14px; }
-    tfoot td { font-weight:700; }
+    input:focus { border-color:#0ea5e9; box-shadow:0 0 0 3px rgba(14,165,233,.2); }
+    .row { display:grid; grid-template-columns: 1fr; gap: 12px; }
+    .inline-3 { display:grid; grid-template-columns: 2fr 1fr 1fr; gap:12px; }
+    .muted { color:var(--muted); font-size:12px; }
+    .btn {
+      height:46px; border:none; border-radius:6px; background:var(--accent); color:#fff;
+      font-weight:700; cursor:pointer; display:inline-flex; align-items:center; justify-content:center;
+    }
+    .btn:disabled { opacity:.6; cursor:default; }
+    .note { font-size:12px; margin-top:4px; color:var(--muted); }
+    .result {
+      margin-top:18px; border:1px solid var(--border); background:var(--bg);
+      border-radius:8px; padding:14px;
+    }
+    .result h3 { margin:0 0 10px; font-size:18px; }
+    .result table { width:100%; border-collapse: collapse; }
+    .result td { padding:6px 0; }
+    .result td:last-child { text-align:right; }
     .right { text-align:right; }
-    .pill { font-size:12px; padding:2px 8px; border-radius:999px; background:#f3f4f6; color:#111827; }
-    .success { color:#065f46; }
-    .muted { color:var(--muted); }
-    small { color:#374151; }
+    @media (max-width: 720px) { .inline-3 { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-  <main class="wrap">
+  <div class="wrap">
     <h1>Special Order – Instant Quote</h1>
 
-    <form id="quoteForm" onsubmit="event.preventDefault(); computeQuote();">
-      <div class="grid card">
+    <form id="quoteForm">
+      <div class="row">
         <div>
-          <label for="name">Your name</label>
-          <input id="name" name="name" autocomplete="name" />
+          <label>Your name</label>
+          <input id="name" type="text" autocomplete="name" placeholder="Your name" />
         </div>
         <div>
-          <label for="email">Email</label>
-          <input id="email" name="email" autocomplete="email" />
+          <label>Email</label>
+          <input id="email" type="email" autocomplete="email" placeholder="you@example.com" />
         </div>
       </div>
 
-      <div class="card">
-        <div class="actions" style="justify-content:space-between; margin-bottom:10px;">
-          <strong>Items</strong>
-          <button class="btn secondary" type="button" onclick="addItem()">+ Add another item</button>
-        </div>
-
-        <div id="items" class="items"></div>
-
-        <div class="hint">Tip: vendor = <b>Amazon</b> or <b>Wayfair</b> → no US sales tax. Otherwise 6.625% applies.</div>
-      </div>
-
-      <div class="actions">
-        <button class="btn primary" type="submit">Get Quote</button>
-        <small class="muted">We’ll calculate landed cost, card fee, and suggested retail using your rules.</small>
-      </div>
-    </form>
-
-    <section id="results" class="card" style="display:none;">
-      <div>
-        <strong>Quote</strong>
-        <span id="ftBadge" class="pill" style="margin-left:8px;"></span>
-      </div>
-      <table id="resultTable">
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th class="right">First Cost</th>
-            <th class="right">Sales Tax</th>
-            <th class="right">Duty (25%)</th>
-            <th class="right">Wharfage (2%)</th>
-            <th class="right">Freight @ $6.46/ft³</th>
-            <th class="right">Fixed FFF ($10)</th>
-            <th class="right">Landed (pre-fee)</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-        <tfoot>
-          <tr><td colspan="7" class="right">Subtotal (pre card fee)</td><td class="right" id="preFee"></td></tr>
-          <tr><td colspan="7" class="right">Card Fee (3.75%)</td><td class="right" id="cardFee"></td></tr>
-          <tr><td colspan="7" class="right">Total Landed</td><td class="right" id="totalLanded"></td></tr>
-          <tr><td colspan="7" class="right">Suggested Retail (<span id="marginPct"></span> margin)</td><td class="right success" id="suggestedRetail"></td></tr>
-        </tfoot>
-      </table>
-      <div class="hint" style="margin-top:6px;">
-        Margin rules: &lt;20 ft³ = 30% · 20–50 ft³ = 25% · 50+ ft³ = 20%
-      </div>
-    </section>
-  </main>
-
-  <script>
-    // === Config (your rules) ===
-    const SALES_TAX = 0.06625;                  // except Amazon/Wayfair
-    const DUTY = 0.25;
-    const WHARFAGE = 0.02;
-    const FREIGHT_PER_FT3 = 6.46;
-    const FIXED_FFF_PER_ITEM = 10;
-    const CARD_FEE = 0.0375;
-
-    function getMargin(totalFt3) {
-      if (totalFt3 < 20) return 0.30;
-      if (totalFt3 <= 50) return 0.25;
-      return 0.20;
-    }
-
-    // === UI helpers ===
-    const itemsDiv = document.getElementById('items');
-
-    function currency(x){ return '$' + (Math.round(x*100)/100).toLocaleString(undefined,{minimumFractionDigits:2}); }
-
-    function addItem(preset={vendor:'Other', link:'', cost:'', ft3:''}) {
-      const idx = itemsDiv.children.length + 1;
-      const row = document.createElement('div');
-      row.className = 'row';
-      row.innerHTML = `
+      <div class="inline-3">
         <div>
-          <label>Vendor</label>
-          <select name="vendor">
-            <option ${preset.vendor==='Amazon'?'selected':''}>Amazon</option>
-            <option ${preset.vendor==='Wayfair'?'selected':''}>Wayfair</option>
-            <option ${preset.vendor==='Other'?'selected':''}>Other</option>
-          </select>
+          <label>Item link (Amazon, Wayfair, etc.)</label>
+          <input id="url0" type="url" placeholder="https://…" />
+          <div class="note">Paste the product URL. Tax auto-rules: Amazon/Wayfair are tax-exempt per your settings.</div>
         </div>
         <div>
-          <label>Product link</label>
-          <input name="link" placeholder="https://..." value="${preset.link}"/>
-        </div>
-        <div>
-          <label>First cost (USD)</label>
-          <input name="cost" type="number" min="0" step="0.01" placeholder="0.00" value="${preset.cost}"/>
+          <label>Price USD</label>
+          <input id="price0" type="number" min="0" step="0.01" placeholder="e.g. 249.99" />
         </div>
         <div>
           <label>Cubic ft</label>
-          <input name="ft3" type="number" min="0" step="0.01" placeholder="e.g. 3.2" value="${preset.ft3}"/>
+          <input id="cf0" type="number" min="0" step="0.01" placeholder="e.g. 4.5" />
         </div>
-        <div class="del">
-          <button class="btn link" type="button" onclick="this.closest('.row').remove()">Remove</button>
-        </div>
-      `;
-      itemsDiv.appendChild(row);
-    }
+      </div>
 
-    // Start with one empty item
-    addItem();
+      <button class="btn" id="goBtn" type="submit">Get Quote</button>
+      <div class="muted">Tip: price & cubic ft help us calculate now. We’ll add automatic price & size lookup next.</div>
+    </form>
 
-    function readItems(){
-      const rows = [...itemsDiv.querySelectorAll('.row')];
-      return rows.map(r => {
-        const vendor = r.querySelector('[name="vendor"]').value.trim();
-        const link   = r.querySelector('[name="link"]').value.trim();
-        const cost   = parseFloat(r.querySelector('[name="cost"]').value) || 0;
-        const ft3    = parseFloat(r.querySelector('[name="ft3"]').value) || 0;
-        return {vendor, link, cost, ft3};
-      }).filter(i => i.cost > 0 && i.ft3 >= 0); // need at least a cost to compute
-    }
+    <div id="result" class="result" style="display:none;"></div>
+  </div>
 
-    function computeQuote(){
-      const items = readItems();
-      if (!items.length) {
-        alert('Please enter at least one item with a First Cost.');
-        return;
-      }
+  <script>
+    const form = document.getElementById('quoteForm');
+    const goBtn = document.getElementById('goBtn');
+    const out = document.getElementById('result');
 
-      // per-item landed pre-cardFee
-      let totalFt3 = 0;
-      let preFeeTotal = 0;
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      goBtn.disabled = true;
 
-      const tbody = document.querySelector('#resultTable tbody');
-      tbody.innerHTML = '';
+      const payload = {
+        name: document.getElementById('name').value.trim(),
+        email: document.getElementById('email').value.trim(),
+        items: [{
+          url: document.getElementById('url0').value.trim(),
+          priceUSD: parseFloat(document.getElementById('price0').value || '0'),
+          cubicFt: parseFloat(document.getElementById('cf0').value || '0')
+        }]
+      };
 
-      items.forEach((it, i) => {
-        totalFt3 += it.ft3;
-        const taxable = !(it.vendor.toLowerCase()==='amazon' || it.vendor.toLowerCase()==='wayfair');
-        const salesTax = taxable ? it.cost * SALES_TAX : 0;
-        const duty = it.cost * DUTY;
-        const wharf = it.cost * WHARFAGE;
-        const freight = it.ft3 * FREIGHT_PER_FT3;
-        const fixed = FIXED_FFF_PER_ITEM;
-        const pre = it.cost + salesTax + duty + wharf + freight + fixed;
+      try {
+        const res = await fetch('/quote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Request failed: ' + res.status);
+        const data = await res.json();
 
-        preFeeTotal += pre;
-
-        const tr = document.createElement('tr');
-        tr.innerHTML = `
-          <td>
-            <div><strong>Item ${i+1}</strong> <span class="pill">${it.vendor}</span></div>
-            ${it.link ? `<small class="muted">${it.link}</small>` : '<small class="muted">No link</small>'}
-          </td>
-          <td class="right">${currency(it.cost)}</td>
-          <td class="right">${currency(salesTax)}</td>
-          <td class="right">${currency(duty)}</td>
-          <td class="right">${currency(wharf)}</td>
-          <td class="right">${currency(freight)}</td>
-          <td class="right">${currency(fixed)}</td>
-          <td class="right">${currency(pre)}</td>
+        // Render quick summary
+        const r = data.summary;
+        out.style.display = 'block';
+        out.innerHTML = `
+          <h3>Quote Summary</h3>
+          <table>
+            <tr><td>Items</td><td class="right">${r.items}</td></tr>
+            <tr><td>First cost</td><td class="right">$${r.firstCost.toFixed(2)}</td></tr>
+            <tr><td>Sales tax</td><td class="right">$${r.salesTax.toFixed(2)}</td></tr>
+            <tr><td>Duty (25%)</td><td class="right">$${r.duty.toFixed(2)}</td></tr>
+            <tr><td>Wharfage (2%)</td><td class="right">$${r.wharfage.toFixed(2)}</td></tr>
+            <tr><td>Freight & Handling</td><td class="right">$${r.freight.toFixed(2)}</td></tr>
+            <tr><td>Card fee (3.75%)</td><td class="right">$${r.cardFee.toFixed(2)}</td></tr>
+            <tr><td><strong>Total Landed</strong></td><td class="right"><strong>$${r.totalLanded.toFixed(2)}</strong></td></tr>
+            <tr><td>Suggested retail (margin ${r.marginPct}%)</td><td class="right">$${r.suggestedRetail.toFixed(2)}</td></tr>
+          </table>
         `;
-        tbody.appendChild(tr);
-      });
-
-      const cardFee = preFeeTotal * CARD_FEE;
-      const landed = preFeeTotal + cardFee;
-      const margin = getMargin(totalFt3);
-      const suggested = landed / (1 - margin);
-
-      document.getElementById('preFee').textContent = currency(preFeeTotal);
-      document.getElementById('cardFee').textContent = currency(cardFee);
-      document.getElementById('totalLanded').textContent = currency(landed);
-      document.getElementById('marginPct').textContent = Math.round(margin*100) + '%';
-      document.getElementById('suggestedRetail').textContent = currency(suggested);
-      document.getElementById('ftBadge').textContent = totalFt3.toFixed(2) + ' ft³';
-
-      document.getElementById('results').style.display = 'block';
-      // No alerts. Pure on-page results.
-    }
+      } catch (err) {
+        out.style.display = 'block';
+        out.innerHTML = `<div style="color:#b91c1c">Error: ${err.message}</div>`;
+      } finally {
+        goBtn.disabled = false;
+      }
+    });
   </script>
 </body>
 </html>
