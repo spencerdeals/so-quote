@@ -5,152 +5,228 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>Special Order – Instant Quote</title>
   <style>
-    :root { --text:#0f2732; --muted:#607b92; --bg:transparent; --accent:#2e7d32; --accent2:#0b5ed7; --danger:#c62828; --card:#fff; --line:#e5e8eb; }
-    html,body{margin:0;padding:0;background:var(--bg);color:var(--text);font:16px/1.5 -apple-system,system-ui,Segoe UI,Roboto,Arial,sans-serif}
-    .wrap{max-width:980px;margin:0 auto;padding:16px 20px}
-    h1{font-size:28px;margin:16px 0 24px;font-weight:700}
-    .card{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:16px}
-    .row{display:grid;grid-template-columns:1fr 1fr 1fr 1fr 100px;gap:10px;align-items:end}
-    .row + .row{margin-top:12px}
-    label{font-weight:600;font-size:13px;color:var(--muted);display:block;margin-bottom:6px}
-    input,select,textarea{width:100%;padding:10px;border:1px solid #d0d7de;border-radius:6px;font-size:14px;box-sizing:border-box}
-    .btn{display:inline-flex;justify-content:center;align-items:center;background:var(--accent);color:#fff;border-radius:8px;padding:12px 18px;border:none;cursor:pointer;font-weight:700}
-    .btn.secondary{background:var(--accent2)} .btn.ghost{background:#fff;color:var(--accent2);border:1px solid var(--accent2)} .btn.danger{background:var(--danger)} .btn:disabled{opacity:.6;cursor:not-allowed}
-    .actions{display:flex;gap:10px;justify-content:flex-end;margin-top:16px}
-    .items{display:grid;gap:12px}
-    .kicker{margin-top:10px;font-size:13px;color:var(--muted)}
-    .results{margin-top:20px;padding:16px;border:1px dashed var(--line);border-radius:10px;background:#fafbfc}
-    table{width:100%;border-collapse:collapse;margin-top:10px}
-    th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left} th{font-size:13px;color:var(--muted)}
-    .right{text-align:right} .total{font-weight:700}
-    .pill{display:inline-block;padding:2px 8px;border-radius:999px;font-size:12px;background:#eef6ff;color:#0b5ed7}
+    :root {
+      --accent:#1e7d32; --text:#333; --muted:#6b7280; --bg:#fff;
+      --input:#d0d5dd; --border:#e5e7eb;
+    }
+    html, body { margin:0; padding:0; background:transparent; color:var(--text); font:16px/1.5 system-ui,-apple-system,Segoe UI,Roboto,Arial,sans-serif; }
+    .wrap { max-width: 980px; margin: 0 auto; padding: 16px 20px 64px; }
+    h1 { font-size: 28px; margin: 16px 0 24px; font-weight: 700; text-align: left; }
+    form { display: grid; gap: 14px; }
+    label { font-weight: 600; display:block; margin-bottom: 6px; }
+    input, select, textarea { width: 100%; box-sizing: border-box; padding: 10px 12px; border:1px solid var(--input); border-radius: 6px; background:#fff; }
+    input:focus, select:focus, textarea:focus { outline: none; border-color:#0d9488; box-shadow: 0 0 0 3px rgba(13,148,136,.15); }
+    .grid { display:grid; gap:12px; }
+    .row { display:grid; grid-template-columns: 140px 1fr 140px 120px auto; gap:10px; align-items:center; }
+    .row .del { justify-self: end; }
+    .hint { color: var(--muted); font-size: 12px; }
+    .btn { display:inline-flex; align-items:center; justify-content:center; gap:8px; padding:10px 14px; border:none; border-radius:8px; cursor:pointer; font-weight:600; }
+    .btn.primary { background: var(--accent); color: #fff; }
+    .btn.secondary { background: #eef2ff; color:#1f2937; }
+    .btn.link { background:transparent; color:var(--accent); padding:4px 8px; }
+    .actions { display:flex; gap:12px; align-items:center; }
+    .items { display:grid; gap:12px; }
+    .card { border:1px solid var(--border); border-radius:10px; background:#fff; padding:14px; }
+    .totals { margin-top: 20px; border-top:1px dashed var(--border); padding-top: 16px; }
+    table { width:100%; border-collapse: collapse; margin-top:10px; }
+    th, td { text-align:left; padding:8px 6px; border-bottom: 1px solid var(--border); font-size:14px; }
+    tfoot td { font-weight:700; }
+    .right { text-align:right; }
+    .pill { font-size:12px; padding:2px 8px; border-radius:999px; background:#f3f4f6; color:#111827; }
+    .success { color:#065f46; }
+    .muted { color:var(--muted); }
+    small { color:#374151; }
   </style>
 </head>
 <body>
   <main class="wrap">
     <h1>Special Order – Instant Quote</h1>
 
-    <div class="card">
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:16px;">
-        <div><label>Your name</label><input id="custName" type="text" placeholder="Jane Doe" /></div>
-        <div><label>Email</label><input id="custEmail" type="email" placeholder="jane@example.com" /></div>
+    <form id="quoteForm" onsubmit="event.preventDefault(); computeQuote();">
+      <div class="grid card">
+        <div>
+          <label for="name">Your name</label>
+          <input id="name" name="name" autocomplete="name" />
+        </div>
+        <div>
+          <label for="email">Email</label>
+          <input id="email" name="email" autocomplete="email" />
+        </div>
       </div>
 
-      <div class="items" id="items"></div>
+      <div class="card">
+        <div class="actions" style="justify-content:space-between; margin-bottom:10px;">
+          <strong>Items</strong>
+          <button class="btn secondary" type="button" onclick="addItem()">+ Add another item</button>
+        </div>
+
+        <div id="items" class="items"></div>
+
+        <div class="hint">Tip: vendor = <b>Amazon</b> or <b>Wayfair</b> → no US sales tax. Otherwise 6.625% applies.</div>
+      </div>
 
       <div class="actions">
-        <button class="btn ghost" id="addItemBtn" type="button">+ Add another item</button>
-        <button class="btn" id="quoteBtn" type="button">Get Quote</button>
+        <button class="btn primary" type="submit">Get Quote</button>
+        <small class="muted">We’ll calculate landed cost, card fee, and suggested retail using your rules.</small>
       </div>
+    </form>
 
-      <div class="kicker">Destination assumed: <span class="pill">07201 (Elizabeth, NJ)</span></div>
-
-      <div class="results" id="results" style="display:none;"></div>
-    </div>
+    <section id="results" class="card" style="display:none;">
+      <div>
+        <strong>Quote</strong>
+        <span id="ftBadge" class="pill" style="margin-left:8px;"></span>
+      </div>
+      <table id="resultTable">
+        <thead>
+          <tr>
+            <th>Item</th>
+            <th class="right">First Cost</th>
+            <th class="right">Sales Tax</th>
+            <th class="right">Duty (25%)</th>
+            <th class="right">Wharfage (2%)</th>
+            <th class="right">Freight @ $6.46/ft³</th>
+            <th class="right">Fixed FFF ($10)</th>
+            <th class="right">Landed (pre-fee)</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+        <tfoot>
+          <tr><td colspan="7" class="right">Subtotal (pre card fee)</td><td class="right" id="preFee"></td></tr>
+          <tr><td colspan="7" class="right">Card Fee (3.75%)</td><td class="right" id="cardFee"></td></tr>
+          <tr><td colspan="7" class="right">Total Landed</td><td class="right" id="totalLanded"></td></tr>
+          <tr><td colspan="7" class="right">Suggested Retail (<span id="marginPct"></span> margin)</td><td class="right success" id="suggestedRetail"></td></tr>
+        </tfoot>
+      </table>
+      <div class="hint" style="margin-top:6px;">
+        Margin rules: &lt;20 ft³ = 30% · 20–50 ft³ = 25% · 50+ ft³ = 20%
+      </div>
+    </section>
   </main>
 
   <script>
-    const itemsEl = document.getElementById("items");
-    const addItemBtn = document.getElementById("addItemBtn");
-    const quoteBtn = document.getElementById("quoteBtn");
-    const resultsEl = document.getElementById("results");
+    // === Config (your rules) ===
+    const SALES_TAX = 0.06625;                  // except Amazon/Wayfair
+    const DUTY = 0.25;
+    const WHARFAGE = 0.02;
+    const FREIGHT_PER_FT3 = 6.46;
+    const FIXED_FFF_PER_ITEM = 10;
+    const CARD_FEE = 0.0375;
 
-    function itemRow(d = {}) {
-      const wrap = document.createElement("div");
-      wrap.className = "row";
-      wrap.innerHTML = `
+    function getMargin(totalFt3) {
+      if (totalFt3 < 20) return 0.30;
+      if (totalFt3 <= 50) return 0.25;
+      return 0.20;
+    }
+
+    // === UI helpers ===
+    const itemsDiv = document.getElementById('items');
+
+    function currency(x){ return '$' + (Math.round(x*100)/100).toLocaleString(undefined,{minimumFractionDigits:2}); }
+
+    function addItem(preset={vendor:'Other', link:'', cost:'', ft3:''}) {
+      const idx = itemsDiv.children.length + 1;
+      const row = document.createElement('div');
+      row.className = 'row';
+      row.innerHTML = `
         <div>
           <label>Vendor</label>
-          <select class="i-vendor">
-            <option${(d.vendor||"").toLowerCase().includes("amazon")?" selected":""}>Amazon</option>
-            <option${(d.vendor||"").toLowerCase().includes("wayfair")?" selected":""}>Wayfair</option>
-            <option${(d.vendor||"") && !/(amazon|wayfair)/i.test(d.vendor)?" selected":""}>Other</option>
+          <select name="vendor">
+            <option ${preset.vendor==='Amazon'?'selected':''}>Amazon</option>
+            <option ${preset.vendor==='Wayfair'?'selected':''}>Wayfair</option>
+            <option ${preset.vendor==='Other'?'selected':''}>Other</option>
           </select>
         </div>
         <div>
-          <label>Item URL</label>
-          <input class="i-url" type="url" placeholder="https://..." value="${d.url||""}" />
+          <label>Product link</label>
+          <input name="link" placeholder="https://..." value="${preset.link}"/>
         </div>
         <div>
           <label>First cost (USD)</label>
-          <input class="i-first" type="number" step="0.01" min="0" placeholder="0.00" value="${d.firstCost||""}" />
+          <input name="cost" type="number" min="0" step="0.01" placeholder="0.00" value="${preset.cost}"/>
         </div>
         <div>
-          <label>Size (ft³)</label>
-          <input class="i-ft3" type="number" step="0.01" min="0" placeholder="e.g. 2.5" value="${d.ft3||""}" />
+          <label>Cubic ft</label>
+          <input name="ft3" type="number" min="0" step="0.01" placeholder="e.g. 3.2" value="${preset.ft3}"/>
         </div>
-        <div>
-          <label>Qty</label>
-          <input class="i-qty" type="number" step="1" min="1" value="${d.qty||1}" />
-        </div>`;
-      return wrap;
+        <div class="del">
+          <button class="btn link" type="button" onclick="this.closest('.row').remove()">Remove</button>
+        </div>
+      `;
+      itemsDiv.appendChild(row);
     }
-    function ensureAtLeastOneRow(){ if(!itemsEl.children.length) itemsEl.appendChild(itemRow()); }
-    addItemBtn.addEventListener("click",()=>itemsEl.appendChild(itemRow()));
 
-    quoteBtn.addEventListener("click", async () => {
-      const rows = Array.from(itemsEl.querySelectorAll(".row"));
-      if (!rows.length) itemsEl.appendChild(itemRow());
-      const items = rows.map(r=>({
-        vendor: r.querySelector(".i-vendor")?.value||"",
-        url: r.querySelector(".i-url")?.value||"",
-        firstCost: r.querySelector(".i-first")?.value||"0",
-        ft3: r.querySelector(".i-ft3")?.value||"0",
-        qty: r.querySelector(".i-qty")?.value||"1",
-      }));
-      quoteBtn.disabled = true; quoteBtn.textContent = "Calculating…";
-      try{
-        const res = await fetch("/api/quote",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({items})});
-        const data = await res.json();
-        renderResults(data);
-      }catch(e){
-        console.error(e);
-        resultsEl.style.display="block";
-        resultsEl.innerHTML=`<div style="color:#c62828">Sorry, something went wrong calculating the quote.</div>`;
-      }finally{
-        quoteBtn.disabled=false; quoteBtn.textContent="Get Quote";
+    // Start with one empty item
+    addItem();
+
+    function readItems(){
+      const rows = [...itemsDiv.querySelectorAll('.row')];
+      return rows.map(r => {
+        const vendor = r.querySelector('[name="vendor"]').value.trim();
+        const link   = r.querySelector('[name="link"]').value.trim();
+        const cost   = parseFloat(r.querySelector('[name="cost"]').value) || 0;
+        const ft3    = parseFloat(r.querySelector('[name="ft3"]').value) || 0;
+        return {vendor, link, cost, ft3};
+      }).filter(i => i.cost > 0 && i.ft3 >= 0); // need at least a cost to compute
+    }
+
+    function computeQuote(){
+      const items = readItems();
+      if (!items.length) {
+        alert('Please enter at least one item with a First Cost.');
+        return;
       }
-    });
 
-    function money(n){ return "$" + (Number(n||0)).toFixed(2); }
-    function pct(n){ return (Number(n)*100).toFixed(2)+"%"; }
+      // per-item landed pre-cardFee
+      let totalFt3 = 0;
+      let preFeeTotal = 0;
 
-    function renderResults(data){
-      if(!data || !data.totals){ resultsEl.style.display="block"; resultsEl.innerHTML=`<div style="color:#c62828">No result.</div>`; return; }
-      const { totals, lines, destinationZip } = data;
-      const rows = lines.map(l=>`
-        <tr>
-          <td>${l.i}</td><td>${l.vendor||""}</td><td>${l.qty}</td>
-          <td class="right">${money(l.firstCost)}</td><td class="right">${l.ft3}</td>
-          <td class="right">${money(l.tax)}</td><td class="right">${money(l.duty)}</td>
-          <td class="right">${money(l.wharfage)}</td><td class="right">${money(l.freight)}</td>
-          <td class="right">${money(l.fixedFff)}</td><td class="right">${money(l.cardShare)}</td>
-          <td class="right total">${money(l.lineLanded)}</td>
-        </tr>`).join("");
-      resultsEl.style.display="block";
-      resultsEl.innerHTML = `
-        <div><strong>Destination:</strong> ${destinationZip||"07201"}</div>
-        <table>
-          <thead><tr>
-            <th>#</th><th>Vendor</th><th>Qty</th>
-            <th class="right">First cost</th><th class="right">ft³ / unit</th>
-            <th class="right">Sales tax</th><th class="right">Duty</th>
-            <th class="right">Wharfage</th><th class="right">Freight</th>
-            <th class="right">Fixed FFF</th><th class="right">Card fee (share)</th>
-            <th class="right">Line landed</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-        <table><tbody>
-          <tr><td>Total ft³</td><td class="right">${totals.totalFt3.toFixed(2)}</td></tr>
-          <tr><td>Subtotal (before card)</td><td class="right">${money(totals.subtotalBeforeCard)}</td></tr>
-          <tr><td>Card fee (3.75%)</td><td class="right">${money(totals.cardFee)}</td></tr>
-          <tr><td class="total">Total landed</td><td class="right total">${money(totals.totalLanded)}</td></tr>
-          <tr><td>Margin applied</td><td class="right">${pct(totals.marginRate)}</td></tr>
-          <tr><td class="total">Suggested retail</td><td class="right total">${money(totals.suggestedRetail)}</td></tr>
-        </tbody></table>`;
+      const tbody = document.querySelector('#resultTable tbody');
+      tbody.innerHTML = '';
+
+      items.forEach((it, i) => {
+        totalFt3 += it.ft3;
+        const taxable = !(it.vendor.toLowerCase()==='amazon' || it.vendor.toLowerCase()==='wayfair');
+        const salesTax = taxable ? it.cost * SALES_TAX : 0;
+        const duty = it.cost * DUTY;
+        const wharf = it.cost * WHARFAGE;
+        const freight = it.ft3 * FREIGHT_PER_FT3;
+        const fixed = FIXED_FFF_PER_ITEM;
+        const pre = it.cost + salesTax + duty + wharf + freight + fixed;
+
+        preFeeTotal += pre;
+
+        const tr = document.createElement('tr');
+        tr.innerHTML = `
+          <td>
+            <div><strong>Item ${i+1}</strong> <span class="pill">${it.vendor}</span></div>
+            ${it.link ? `<small class="muted">${it.link}</small>` : '<small class="muted">No link</small>'}
+          </td>
+          <td class="right">${currency(it.cost)}</td>
+          <td class="right">${currency(salesTax)}</td>
+          <td class="right">${currency(duty)}</td>
+          <td class="right">${currency(wharf)}</td>
+          <td class="right">${currency(freight)}</td>
+          <td class="right">${currency(fixed)}</td>
+          <td class="right">${currency(pre)}</td>
+        `;
+        tbody.appendChild(tr);
+      });
+
+      const cardFee = preFeeTotal * CARD_FEE;
+      const landed = preFeeTotal + cardFee;
+      const margin = getMargin(totalFt3);
+      const suggested = landed / (1 - margin);
+
+      document.getElementById('preFee').textContent = currency(preFeeTotal);
+      document.getElementById('cardFee').textContent = currency(cardFee);
+      document.getElementById('totalLanded').textContent = currency(landed);
+      document.getElementById('marginPct').textContent = Math.round(margin*100) + '%';
+      document.getElementById('suggestedRetail').textContent = currency(suggested);
+      document.getElementById('ftBadge').textContent = totalFt3.toFixed(2) + ' ft³';
+
+      document.getElementById('results').style.display = 'block';
+      // No alerts. Pure on-page results.
     }
-    ensureAtLeastOneRow();
   </script>
 </body>
 </html>
