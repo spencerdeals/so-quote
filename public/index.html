@@ -3,25 +3,23 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
- <!-- VERSION: 2025-08-17 01:25 (stamp A) -->
-<title>Special Order – Instant Quote (NEW A)</title>
+  <title>Special Order – Instant Quote (BUILD STAMP D)</title>
+  <!-- VERSION: BUILD STAMP D | 2025-08-17 -->
   <style>
     body { font-family: Arial, sans-serif; background:#fff; margin:0; padding:2rem; color:#333; }
     h1 { font-size:1.8rem; margin-bottom:1rem; }
-    form { max-width:600px; margin:auto; }
-    label { display:block; margin:1rem 0 0.3rem; font-weight:600; }
-    input, select, textarea, button {
-      width:100%; padding:0.6rem; font-size:1rem; border:1px solid #ccc; border-radius:6px;
-    }
-    button {
-      background:#2c7a3f; color:#fff; border:none; margin-top:1.2rem; cursor:pointer; font-size:1.1rem;
-    }
+    form { max-width:600px; margin:auto; display:grid; gap:14px; }
+    label { display:block; font-weight:600; }
+    input, select, button { width:100%; padding:0.6rem; font-size:1rem; border:1px solid #ccc; border-radius:6px; }
+    button { background:#2c7a3f; color:#fff; border:none; margin-top:0.4rem; cursor:pointer; font-size:1.1rem; }
     button:hover { background:#256b36; }
     .tip { margin-top:1rem; font-size:0.9rem; color:#666; text-align:center; }
   </style>
 </head>
 <body>
   <h1>Special Order – Instant Quote</h1>
+  <div class="tip">BUILD STAMP D</div>
+
   <form id="quoteForm">
     <label for="name">Your name</label>
     <input type="text" id="name" name="name" placeholder="Your name" required />
@@ -35,8 +33,8 @@
     <label for="category">Category</label>
     <select id="category" name="category" required>
       <option value="">Select a category</option>
-      <option value="upholstered">Upholstered Furniture</option>
-      <option value="other">Other Furniture</option>
+      <option value="upholstered">Upholstered Furniture (25% duty)</option>
+      <option value="other">Other</option>
     </select>
 
     <label for="quantity">Quantity</label>
@@ -45,8 +43,6 @@
     <button type="submit">Get Quote</button>
   </form>
 
-  <div class="tip">
-    Paste the product URL above. Our system will automatically fetch price & cubic ft.
-  </div>
+  <div class="tip">We’ll auto-fetch price & cubic ft from the product page; no need to enter them.</div>
 </body>
 </html>
