@@ -1,6 +1,7 @@
+// index.js – SO-Quote backend using scraper (CommonJS)
 const express = require("express");
 const cors = require("cors");
-const { scrapeProduct } = require("./scraper");
+const { scrapeProduct } = require("./scraper");   // <-- name MUST match
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -20,7 +21,7 @@ app.post("/quote", async (req, res) => {
 
     const items = [];
     for (const url of links) {
-      const { title, firstCost } = await scrapeProduct(url);
+      const { title, firstCost } = await scrapeProduct(url);  // <-- ensure this runs
       items.push({ title, url, qty: 1, firstCost });
     }
 
