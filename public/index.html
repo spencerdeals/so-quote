@@ -1,167 +1,242 @@
-<script>
-// ==== CONFIG & HEALTH ====
-let BACKEND_URL = localStorage.getItem('instantImportBackend') || '';
-function setBackend(u){ BACKEND_URL=(u||'').trim(); localStorage.setItem('instantImportBackend', BACKEND_URL); checkHealth(); }
-async function checkHealth(){
-  const badge = document.getElementById('healthBadge');
-  try{
-    if(!BACKEND_URL){ badge.innerText='Frontend only'; return; }
-    const r = await fetch(BACKEND_URL.replace(/\/$/,'') + '/health', { cache:'no-store' });
-    const j = await r.json();
-    badge.innerText = 'Backend ' + (j?.version || 'ok');
-  }catch{ badge.innerText='Backend unreachable'; }
-}
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Instant Import V5 — Bulk Paste → Line Items</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    :root { --sdl:#2e7d32; --sdl-dark:#1b5e20; --sdl-soft:#e8f5e9; }
+    .btn { padding: 0.5rem 1rem; border-radius: 0.375rem; }
+    .btn-primary { background: var(--sdl); color: #fff; }
+    .btn-primary:hover { background: var(--sdl-dark); }
+    .btn-ghost { border: 1px solid #e5e7eb; background: #fff; }
+    .num { appearance: textfield; }
+    .num::-webkit-inner-spin-button, .num::-webkit-outer-spin-button { appearance: none; }
+  </style>
+</head>
+<body class="p-6 font-sans bg-gray-50">
+  <header class="mb-4">
+    <h1 class="text-2xl font-bold">Instant Import V5 — Bulk Paste → Line Items</h1>
+    <p class="text-sm text-gray-700">
+      Paste <strong>links only</strong>, one per line. We’ll split them into items and group by <strong>vendor</strong>.
+      <span class="inline-block mt-1 p-1 px-2 bg-[var(--sdl-soft)] border rounded">
+        Note: Enter prices manually. Use <em>Get Price</em> to open the product page.
+      </span>
+    </p>
+  </header>
 
-// ==== MODEL ====
-let items=[]; let vendorFees={};
-const ENTRY_FEE_PER_ITEM=9, WHARFAGE_PER_ITEM=0;
+  <section class="mb-4">
+    <label for="links" class="block text-sm font-medium mb-1">Product links (one per line)</label>
+    <textarea id="links" class="w-full border rounded p-3 min-h-[140px]" placeholder="https://www.amazon.com/...
+https://www.wayfair.com/...
+https://www.target.com/...
+..."></textarea>
+    <div class="mt-2 flex items-center gap-2">
+      <button id="process" class="btn btn-primary">Create line items</button>
+      <button id="clearAll" class="btn btn-ghost">Clear All</button>
+    </div>
+  </section>
 
-// ==== HELPERS ====
-function parseLinks(t){ return Array.from(new Set((t||'').split(/\n|\s+/).map(s=>s.trim()).filter(s=>/^https?:\/\//.test(s)))); }
-function hostname(u){ try{ const h=new URL(u).hostname.toLowerCase(); return h.replace(/^www\./,''); }catch{ return 'unknown'; } }
-function guessNameFromUrl(u){ try{ const p=new URL(u).pathname.split('/').filter(Boolean); const last=p[p.length-1]||u; return decodeURIComponent(last.replace(/[-_]/g,' ')).slice(0,120); }catch{ return u; } }
-function money(n){ return (n||0).toLocaleString(undefined,{style:'currency',currency:'USD'}); }
+  <section id="groupsSection" class="hidden">
+    <div class="flex items-center justify-between mb-2">
+      <h2 class="text-lg font-semibold">Grouped by Vendor</h2>
+      <div id="totalsBadge" class="text-sm text-gray-700"></div>
+    </div>
+    <div id="groups" class="space-y-6"></div>
+    <div class="mt-4 p-3 bg-[var(--sdl-soft)] border rounded flex items-center justify-between">
+      <strong>Grand Total (items + vendor delivery fees):</strong>
+      <span id="grandTotal">$0.00</span>
+    </div>
+  </section>
 
-// ==== STEPPER ====
-const stepper=document.getElementById('stepper').children;
-function goStep(n){ for(let i=0;i<3;i++){ stepper[i].classList.remove('step-active'); document.getElementById(`panel-${i+1}`).classList.add('hidden'); } stepper[n-1].classList.add('step-active'); document.getElementById(`panel-${n}`).classList.remove('hidden'); }
+  <script>
+    // ====== CONFIG ======
+    // If backend is a different domain, set it here, e.g.:
+    // const API_BASE = "https://your-backend.example.com";
+    const API_BASE = window.location.origin;
 
-// ==== STEP 1: RENDER CURRENT ITEMS (title + price) ====
-function refreshLinkList(){
-  const ul=document.getElementById('linkList'); ul.innerHTML='';
-  items.forEach((it,idx)=>{
-    const title = it.title && it.title!=='Fetching name…' ? it.title : guessNameFromUrl(it.url);
-    const li=document.createElement('li');
-    li.className='flex items-center gap-2';
-    li.innerHTML = `<span class="flex-1 break-all">${title}</span>
-      <input type="number" step="0.01" min="0" placeholder="Price" value="${Number.isFinite(it.unitPrice)?it.unitPrice:''}" data-idx="${idx}" class="num w-28 border rounded px-2 py-1"/>`;
-    ul.appendChild(li);
-  });
-  ul.querySelectorAll('input[data-idx]').forEach(inp=>{
-    inp.addEventListener('input',e=>{
-      const i=+e.target.dataset.idx, v=e.target.value;
-      items[i].unitPrice = v===''? undefined : (parseFloat(v)||0);
-    });
-  });
-}
+    // ====== Helpers ======
+    function parseLines(text){
+      return (text||'').split(/\r?\n+/).map(line => line.trim()).filter(Boolean);
+    }
+    function normalizeHost(url){
+      try{ return new URL(url).hostname.replace(/^www\./,''); }catch{return 'other';}
+    }
+    function vendorLabel(host){
+      const map={ 'amazon.com':'Amazon','wayfair.com':'Wayfair','target.com':'Target' };
+      return map[host]||host;
+    }
+    function currency(n){
+      const v = Number(n)||0; return `$${v.toFixed(2)}`;
+    }
+    function cleanUrl(raw){
+      let u = (raw||'').trim();
+      if(!u) return '';
+      u = u.replace(/^\d+\)\s*/, '').replace(/^\(|\)$/g,'');   // strip "1) " and ( ... )
+      if(!/^https?:\/\//i.test(u)){ u = `https://${u}`; }      // add protocol if missing
+      try{
+        const url = new URL(u);
+        const host = url.hostname.replace(/^www\./,'');
+        // unwrap common redirectors
+        if(host === 'google.com' && url.pathname === '/url'){
+          const target = url.searchParams.get('q') || url.searchParams.get('url');
+          if(target) return cleanUrl(target);
+        }
+        if(host === 'l.facebook.com' || host === 'lm.facebook.com'){
+          const target = url.searchParams.get('u');
+          if(target) return cleanUrl(target);
+        }
+        if(host === 'r.mail.yahoo.com' || host === 'urldefense.proofpoint.com'){
+          const target = url.searchParams.get('q') || url.searchParams.get('u');
+          if(target) return cleanUrl(target);
+        }
+        ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','fbclid','gclid','spm','_hsenc','_hsmi']
+          .forEach(p=>url.searchParams.delete(p));
+        return url.toString();
+      }catch{ return u; }
+    }
 
-function ensureVendors(){
-  const vendors=[...new Set(items.map(it=>it.vendor))];
-  const wrap=document.getElementById('vendorFeesWrap');
-  const list=document.getElementById('vendorFees');
-  if(!vendors.length){ wrap.classList.add('hidden'); list.innerHTML=''; return; }
-  wrap.classList.remove('hidden'); list.innerHTML='';
-  vendors.forEach(v=>{
-    if(!vendorFees[v]) vendorFees[v]={delivery:0};
-    const val=vendorFees[v].delivery??0;
-    const row=document.createElement('div');
-    row.className='flex items-center gap-2 border rounded-xl p-2 bg-white';
-    row.innerHTML=`<div class="font-medium flex-1">${v}</div><label class="text-sm">Delivery fee</label><input type="number" min="0" step="0.01" value="${val}" data-vendor="${v}" class="num w-28 border rounded px-2 py-1" />`;
-    list.appendChild(row);
-  });
-}
-
-function validateStep1(){
-  const ok = items.length && document.getElementById('variantCheckbox').checked;
-  const btn = document.getElementById('toStep2');
-  btn.disabled = !ok; btn.classList.toggle('disabled', !ok);
-}
-
-// ==== ENRICH (BATCH) WITH TIMEOUT + URL-NAME FALLBACK ====
-async function enrichBatch(urls){
-  if(!urls.length) return;
-  // If no backend configured, fallback to URL-based names immediately
-  if(!BACKEND_URL){
-    urls.forEach(u=>{ const it=items.find(x=>x.url===u);
-      if(it && (!it.title || it.title==='Fetching name…')) it.title = guessNameFromUrl(u);
-    });
-    refreshLinkList(); return;
-  }
-  const controller = new AbortController();
-  const t = setTimeout(()=>controller.abort(), 8000);
-  try{
-    const r = await fetch(BACKEND_URL.replace(/\/$/,'')+'/enrich', {
-      method:'POST', headers:{'Content-Type':'application/json'}, signal: controller.signal,
-      body: JSON.stringify({ items: urls.map(u=>({ url:u })) })
-    });
-    if(r.ok){
-      const j = await r.json();
-      const map = new Map((j.items||[]).map(en=>[en.url, en]));
-      items = items.map(it=>{
-        const en = map.get(it.url);
-        if(!en) return it;
+    // ====== Data building ======
+    function buildItems(lines){
+      let counts={};
+      return lines.map(line => {
+        const parts = line.split(',');
+        const urlPartRaw = (parts[0]||'').trim();
+        const urlPart = cleanUrl(urlPartRaw);
+        const pricePart = (parts[1]||'').trim();
+        const host = normalizeHost(urlPart);
+        counts[host] = (counts[host]||0) + 1;
         return {
-          ...it,
-          title: en.title || it.title || guessNameFromUrl(it.url),
-          unitPrice: Number.isFinite(en.unitPrice) ? en.unitPrice : it.unitPrice
+          url: urlPart,
+          vendorHost: host,
+          title: `${vendorLabel(host)} Item ${counts[host]}`, // fallback text
+          name: 'Fetching name…',  // will be replaced by /meta result
+          unitPrice: pricePart,
+          _fetched: false
         };
       });
-      refreshLinkList();
     }
-  }catch{/* ignore; fallback below */}
-  finally{ clearTimeout(t); }
-  // Final fallback
-  urls.forEach(u=>{ const it=items.find(x=>x.url===u);
-    if(it && (!it.title || it.title==='Fetching name…')) it.title = guessNameFromUrl(u);
-  });
-  refreshLinkList();
-}
+    function groupByVendor(items){
+      const groups={};
+      items.forEach(it=>{
+        const key=it.vendorHost;
+        if(!groups[key]) groups[key]={key, label:vendorLabel(key), items:[], deliveryFee:''};
+        groups[key].items.push(it);
+      });
+      return groups;
+    }
 
-// ==== STEP 1 EVENTS ====
-document.getElementById('addLinkBtn').onclick = ()=>{
-  const input=document.getElementById('linkInputSingle');
-  const urls=parseLinks(input.value);
-  if(!urls.length) return;
-  urls.forEach(u=>{ items.push({ url:u, title:'Fetching name…', qty:1, unitPrice:undefined, notes:'', vendor:hostname(u) }); });
-  input.value='';
-  refreshLinkList(); ensureVendors(); validateStep1();
-  enrichBatch(urls);
-};
-document.getElementById('variantCheckbox').onchange = validateStep1;
+    // ====== Fetch product names ======
+    async function fetchTitleForItem(it, onUpdate){
+      if(it._fetched || !it.url) return;
+      it._fetched = true;
+      try{
+        const resp = await fetch(`${API_BASE}/meta?url=${encodeURIComponent(it.url)}`);
+        const data = await resp.json();
+        it.name = (data && data.name) ? data.name : '(Title unavailable)';
+      }catch{
+        it.name = '(Title unavailable)';
+      }
+      onUpdate(); // re-render to show the name
+    }
+    function kickoffTitleFetches(groups, onUpdate){
+      Object.values(groups).forEach(grp=>{
+        grp.items.forEach(it=> fetchTitleForItem(it, onUpdate));
+      });
+    }
 
-// ==== STEP 2 RENDER (title + price/fees, unchanged math) ====
-function renderItemsTable(){
-  const tb=document.getElementById('itemsBody'); tb.innerHTML='';
-  items.forEach((it,i)=>{
-    const missing = !(Number.isFinite(it.unitPrice) && it.unitPrice>0);
-    const wharf = WHARFAGE_PER_ITEM * it.qty;
-    const entry = ENTRY_FEE_PER_ITEM * it.qty;
-    const title = it.title || guessNameFromUrl(it.url);
-    tb.innerHTML += `
-      <tr class="align-top">
-        <td class="py-2 pr-3">
-          <div class="font-medium">${title}</div>
-          <a class="text-[var(--sdl-green)] underline text-xs" href="${it.url}" target="_blank">${it.url}</a>
-          ${missing?'<div class="text-xs text-rose-600">Needs price</div>':''}
-          <div class="text-[10px] text-gray-500">Vendor: ${it.vendor}</div>
-        </td>
-        <td class="py-2 pr-3"><input type="number" min="1" value="${it.qty}" data-i="${i}" class="qty num w-20 border rounded px-2 py-1"></td>
-        <td class="py-2 pr-3"><input type="number" step="0.01" min="0" value="${Number.isFinite(it.unitPrice)?it.unitPrice:''}" data-i="${i}" class="price num w-32 border rounded px-2 py-1" placeholder="enter price"></td>
-        <td class="py-2 pr-3">${wharf.toFixed(2)}</td>
-        <td class="py-2 pr-3">${entry.toFixed(2)}</td>
-        <td class="py-2 pr-3"><input type="text" value="${it.notes||''}" data-i="${i}" class="note w-full border rounded px-2 py-1" placeholder="variant, color, size"></td>
-        <td class="py-2 pr-1"><button class="del text-red-600" data-i="${i}">✕</button></td>
-      </tr>`;
-  });
-  tb.querySelectorAll('.qty').forEach(e=>e.oninput=ev=>{ items[e.dataset.i].qty=Math.max(1,parseInt(ev.target.value||1)); renderTotalsIfVisible(); });
-  tb.querySelectorAll('.price').forEach(e=>e.oninput=ev=>{ items[e.dataset.i].unitPrice = ev.target.value===''? undefined : (parseFloat(ev.target.value)||0); validateStep2(); renderTotalsIfVisible(); });
-  tb.querySelectorAll('.note').forEach(e=>e.oninput=ev=>{ items[e.dataset.i].notes=ev.target.value; });
-  tb.querySelectorAll('.del').forEach(e=>e.onclick=()=>{ items.splice(e.dataset.i,1); renderItemsTable(); validateStep2(); ensureVendors(); renderTotalsIfVisible(); });
-  validateStep2();
-}
-function validateStep2(){ const b=document.getElementById('toStep3'); b.disabled = !items.every(it=>Number.isFinite(it.unitPrice)&&it.unitPrice>0); b.classList.toggle('disabled', b.disabled); }
-function totals(){ const itemsTotal = items.reduce((s,it)=>s+((Number.isFinite(it.unitPrice)?it.unitPrice:0)*it.qty),0); const wharf=items.length*WHARFAGE_PER_ITEM; const entry=items.length*ENTRY_FEE_PER_ITEM; const delivery=Object.values(vendorFees).reduce((s,v)=>s+(v?.delivery||0),0); const grand=itemsTotal+wharf+entry+delivery; return { itemsTotal, wharf, entry, delivery, grand }; }
-function moneyTotals(){ const t=totals(); return { items:money(t.itemsTotal), wharf:money(t.wharf), entry:money(t.entry), delivery:money(t.delivery), grand:money(t.grand) }; }
-function renderVendorSummary(){ const vs=document.getElementById('vendorSummary'); if(!vs) return; const vendors=[...new Set(items.map(it=>it.vendor))]; vs.innerHTML=''; vendors.forEach(v=>{ const n=vendorFees[v]?.delivery||0; const div=document.createElement('div'); div.className='flex items-center gap-2'; div.innerHTML=`<div class="flex-1">${v}</div><input type="number" min="0" step="0.01" value="${n}" data-vendor="${v}" class="num w-28 border rounded px-2 py-1" />`; vs.appendChild(div); }); vs.querySelectorAll('input[data-vendor]').forEach(inp=>inp.addEventListener('input',e=>{ const v=e.target.getAttribute('data-vendor'); const n=parseFloat(e.target.value||'0')||0; vendorFees[v]={delivery:n}; renderTotalsIfVisible(); })); }
-function renderSummary(){ const tb=document.getElementById('summaryBody'); tb.innerHTML=''; items.forEach(it=>{ const u=Number.isFinite(it.unitPrice)?it.unitPrice:0; const wh=WHARFAGE_PER_ITEM; const en=ENTRY_FEE_PER_ITEM; const rowTotal=u*it.qty+wh+en; const title=it.title||guessNameFromUrl(it.url); tb.innerHTML += `<tr><td class="py-1 pr-2">${title}</td><td class="py-1 pr-2">${it.qty}</td><td class="py-1 pr-2">${money(u)}</td><td class="py-1 pr-2">${money(wh)}</td><td class="py-1 pr-2">${money(en)}</td><td class="py-1 pr-2">${money(rowTotal)}</td></tr>`; }); const t=moneyTotals(); document.getElementById('sumItems').innerText=t.items; document.getElementById('sumDelivery').innerText=t.delivery; document.getElementById('sumWharf').innerText=t.wharf; document.getElementById('sumEntry').innerText=t.entry; document.getElementById('sumGrand').innerText=t.grand; const sv=document.getElementById('summaryVendors'); sv.innerHTML=''; Object.keys(vendorFees).forEach(v=>{ const n=vendorFees[v]?.delivery||0; const div=document.createElement('div'); div.className='flex justify-between text-sm'; div.innerHTML=`<span>${v}</span><span>${money(n)}</span>`; sv.appendChild(div); }); }
-function renderTotalsIfVisible(){ if(!document.getElementById('panel-3').classList.contains('hidden')) renderSummary(); }
+    // ====== UI render ======
+    function renderGroups(groups){
+      const wrap=document.getElementById('groups');
+      wrap.innerHTML='';
+      let grand=0; let vendorCount=0; let itemCount=0;
 
-// ==== NAV ====
-document.getElementById('toStep2').onclick = ()=>{ renderItemsTable(); renderVendorSummary(); goStep(2); };
-document.getElementById('backTo1').onclick = ()=> goStep(1);
-document.getElementById('toStep3').onclick = ()=>{ renderSummary(); goStep(3); };
+      for(const [key,grp] of Object.entries(groups)){
+        vendorCount++; itemCount+=grp.items.length;
+        const vendorSubtotal = grp.items.reduce((s,it)=> s + (Number(it.unitPrice)||0), 0);
+        const delivery = Number(grp.deliveryFee)||0;
+        const vendorTotal = vendorSubtotal + delivery;
+        grand += vendorTotal;
 
-// ==== BOOT ====
-checkHealth();
-goStep(1);
-</script>
+        const card=document.createElement('div');
+        card.className='bg-white border rounded p-3';
+
+        const itemsHtml = grp.items.map((it, idx)=>{
+          const idPrice = `price-${key}-${idx}`;
+          const idBtn = `btn-${key}-${idx}`;
+          const idUrl = `url-${key}-${idx}`;
+          const idName = `name-${key}-${idx}`;
+          return `
+            <div class="mb-3">
+              <div class="text-sm text-gray-500">Vendor: ${grp.label}</div>
+              <div class="font-medium" id="${idName}">${it.name || it.title}</div>
+              <div class="text-xs text-gray-600 break-all" id="${idUrl}">${it.url}</div>
+              <div class="mt-1 flex items-center gap-2">
+                <input type="number" step="0.01" inputmode="decimal" class="num border rounded p-2 w-32" id="${idPrice}" placeholder="Price" value="${it.unitPrice||''}" />
+                <a href="${it.url}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" id="${idBtn}">Get Price</a>
+              </div>
+            </div>`;
+        }).join('');
+
+        card.innerHTML = `
+          <div class="font-semibold mb-2">${grp.label}</div>
+          ${itemsHtml}
+          <label class="block text-xs text-gray-700 mb-1">Delivery fee (optional) for ${grp.label}</label>
+          <input type="number" step="0.01" inputmode="decimal" class="num border rounded p-2 w-28" placeholder="0.00" data-vendor="${key}" value="${grp.deliveryFee||''}" />
+          <div class="mt-2 text-sm">Vendor subtotal: <strong>${currency(vendorSubtotal)}</strong></div>
+          <div class="text-sm">Delivery fee: <strong>${currency(delivery)}</strong></div>
+          <div class="text-sm">Vendor total: <strong>${currency(vendorTotal)}</strong></div>
+        `;
+        wrap.appendChild(card);
+
+        // Listeners
+        grp.items.forEach((it, idx)=>{
+          const priceEl = card.querySelector(`#price-${key}-${idx}`);
+          if(priceEl){
+            priceEl.addEventListener('input', (e)=>{
+              it.unitPrice = e.target.value;
+              renderGroups(window.__GROUPS__); // keep totals live
+            });
+          }
+        });
+
+        const delEl = card.querySelector(`input[data-vendor="${key}"]`);
+        if(delEl){
+          delEl.addEventListener('input', (e)=>{
+            groups[key].deliveryFee = e.target.value;
+            renderGroups(window.__GROUPS__);
+          });
+        }
+      }
+
+      document.getElementById('totalsBadge').textContent=`${vendorCount} vendor(s), ${itemCount} item(s)`;
+      document.getElementById('grandTotal').textContent=currency(grand);
+    }
+
+    // ====== Events ======
+    document.getElementById('process').addEventListener('click',()=>{
+      const lines=parseLines(document.getElementById('links').value);
+      if(!lines.length) return;
+      const items=buildItems(lines);
+      window.__GROUPS__=groupByVendor(items);
+      document.getElementById('groupsSection').classList.remove('hidden');
+
+      // Initial render shows placeholders, then background fetch fills names
+      renderGroups(window.__GROUPS__);
+      kickoffTitleFetches(window.__GROUPS__, ()=> renderGroups(window.__GROUPS__));
+
+      // focus first price input
+      const first = document.querySelector('#groups input[type="number"]');
+      if(first) first.focus();
+    });
+
+    document.getElementById('clearAll').addEventListener('click',()=>{
+      document.getElementById('links').value='';
+      document.getElementById('groups').innerHTML='';
+      document.getElementById('groupsSection').classList.add('hidden');
+      window.__GROUPS__ = {};
+    });
+  </script>
+</body>
+</html>
