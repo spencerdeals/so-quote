@@ -1,18 +1,14 @@
 {
-  "name": "so-quote",
+  "name": "instant-import-v5-backend",
   "version": "1.0.0",
-  "description": "SDL Instant Quote backend with /meta endpoint",
-  "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "cheerio": "^1.0.0-rc.12",
+    "cheerio": "^1.0.0",
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "undici": "^6.19.8"
-  },
-  "engines": {
-    "node": ">=18"
   }
 }
