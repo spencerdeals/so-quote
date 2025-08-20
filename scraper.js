@@ -20,7 +20,7 @@ async function scrapeProduct(url) {
       $("title").first().text().trim() ||
       "Item";
 
-    // 1) Prefer “Sale/Now” price text
+    // 1) Prefer SALE / NOW price (Ashley & Crate often show "Sale $1,954.00")
     const saleNode = $('*:contains("Sale"), *:contains("Now"), *:contains("Today")')
       .filter((_, el) => /\$\s*\d[\d,\.]*/.test($(el).text()))
       .first();
@@ -38,10 +38,17 @@ async function scrapeProduct(url) {
       '[data-test*="price"]',
       '[class*="price"]',
       '[class*="Price"]',
-      ".price", ".sale", ".salesprice", ".product-price", ".final-price"
+      ".price", ".sale", ".salesprice", ".product-price", ".final-price",
+      'meta[itemprop="price"]', 'meta[property="product:price:amount"]'
     ].join(",");
-    const text = $(containers).text();
-    const m2 = text.match(/\$\s*\d[\d,\.]*/);
+    // direct meta content price
+    const metaPrice =
+      Number($('meta[itemprop="price"]').attr("content")) ||
+      Number($('meta[property="product:price:amount"]').attr("content")) || 0;
+    if (metaPrice) return { title, firstCost: metaPrice, url };
+
+    const contText = $(containers).text();
+    const m2 = contText.match(/\$\s*\d[\d,\.]*/);
     if (m2) {
       const p = toNum(m2[0]);
       if (p) return { title, firstCost: p, url };
@@ -66,7 +73,7 @@ async function scrapeProduct(url) {
     });
     if (ldPrice) return { title, firstCost: ldPrice, url };
 
-    // 4) Last resort: first currency on page
+    // 4) Last resort: first currency on the whole page
     const any = $("body").text().match(/\$\s*\d[\d,\.]*/);
     if (any) {
       const p = toNum(any[0]);
