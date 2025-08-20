@@ -1,27 +1,27 @@
-// index.js – SO-Quote backend (CommonJS) with route inspector
+// index.js – SO-Quote backend (CommonJS) with scraper + route inspector
 const express = require("express");
 const cors = require("cors");
 const { scrapeProduct } = require("./scraper");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
-const VERSION = "so-quote@v23"; // <— bump this if needed to confirm redeploy
+const VERSION = "so-quote@v25"; // bump to confirm redeploy
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --- Health ---
+// --- Health (frontend expects JSON) ---
 app.get("/health", (_req, res) => {
   res.json({ ok: true, version: "3.3-container", calc: "landed-v1", api: VERSION });
 });
 
-// --- Quick homepage (shows version) ---
+// --- Simple homepage (shows version) ---
 app.get("/", (_req, res) => {
   res.send(`SO-Quote API running (${VERSION})`);
 });
 
-// --- Test scraper directly ---
+// --- Test the scraper directly (manual check) ---
 app.get("/test-scrape", async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: "Missing ?url=" });
@@ -33,7 +33,7 @@ app.get("/test-scrape", async (req, res) => {
   }
 });
 
-// --- Frontend endpoint ---
+// --- Main endpoint used by the frontend ---
 app.post("/quote", async (req, res) => {
   try {
     const links = Array.isArray(req.body?.links) ? req.body.links.filter(Boolean) : [];
@@ -45,7 +45,10 @@ app.post("/quote", async (req, res) => {
       items.push({ title, url, qty: 1, firstCost });
     }
 
-    const subtotal = Math.round(items.reduce((s, it) => s + (it.firstCost * (it.qty || 1)), 0) * 100) / 100;
+    const subtotal = Math.round(
+      items.reduce((s, it) => s + (it.firstCost * (it.qty || 1)), 0) * 100
+    ) / 100;
+
     res.json({ items, subtotal });
   } catch (e) {
     console.error("quote error:", e?.message || e);
@@ -53,7 +56,7 @@ app.post("/quote", async (req, res) => {
   }
 });
 
-// --- Route inspector so we can SEE what’s running ---
+// --- Route inspector (to verify what’s live) ---
 app.get("/__routes", (_req, res) => {
   const routes = [];
   app._router.stack.forEach(layer => {
