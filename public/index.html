@@ -1,240 +1,3 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SDL — Instant Quote</title>
-  <style>
-    :root{ --sdl:#22A457; --sdl-dark:#0E6B38; --sdl-light:#41C96A; --bg:#f7faf9; --text:#0f172a; --muted:#4b5563; --line:#e5e7eb; --warn:#dc2626; }
-    *{box-sizing:border-box}
-    body{margin:0;background:var(--bg);color:var(--text);font:400 16px/1.6 Inter, system-ui, -apple-system, Segoe UI, Roboto, Arial, sans-serif}
-    .container{max-width:1100px;margin:36px auto;padding:0 16px}
-    .header{display:flex;align-items:center;gap:12px;margin-bottom:14px}
-    .logo{width:36px;height:36px;border-radius:50%;display:grid;place-items:center;background:radial-gradient(circle at 30% 30%, var(--sdl-light), var(--sdl), var(--sdl-dark));color:#fff;font-weight:900}
-    .steps{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 22px}
-    .step{border:1px solid var(--line);border-radius:999px;padding:10px 14px;display:flex;align-items:center;gap:10px;background:#fff}
-    .step .dot{width:22px;height:22px;border-radius:999px;border:2px solid var(--line)}
-    .step.active{border-color:var(--sdl)}
-    .step.active .dot{background:var(--sdl)}
-    .card{background:#fff;border:1px solid var(--line);border-radius:14px;box-shadow:0 6px 24px rgba(2,6,23,.06)}
-    .pad{padding:18px}
-    .muted{color:var(--muted)}
-    .note{margin:12px 0;padding:12px;border-radius:10px;font-size:14px}
-    .note-info{background:#f0fdf4;border:1px solid #bbf7d0;color:#065f46}
-    .note-warn{background:#fef2f2;border:1px solid #fecaca;color:var(--warn)}
-    label{font-size:13px;color:var(--muted);display:block;margin:0 0 6px}
-    .input, textarea{width:100%;border:1px solid var(--line);border-radius:10px;padding:12px;background:#fff}
-    .input:focus, textarea:focus{outline:3px solid rgba(34,164,87,.25);border-color:var(--sdl)}
-    textarea{min-height:130px;resize:vertical}
-    .row{display:flex;gap:16px;flex-wrap:wrap}
-    .col{flex:1 1 320px}
-    .btn{appearance:none;border:0;border-radius:10px;padding:12px 16px;font-weight:700;cursor:pointer}
-    .btn-primary{background:linear-gradient(135deg,var(--sdl),var(--sdl-dark));color:#fff}
-    .btn-ghost{background:#fff;border:1px solid var(--line)}
-    .footer{display:flex;justify-content:flex-end;gap:12px;padding:14px;border-top:1px solid var(--line);background:#fafafa;border-bottom-left-radius:14px;border-bottom-right-radius:14px}
-    table{width:100%;border-collapse:collapse}
-    th,td{padding:10px;border-bottom:1px solid var(--line);text-align:right}
-    th:first-child,td:first-child{text-align:left}
-    tfoot td{font-weight:800}
-    .adminTag{margin-left:10px;padding:2px 8px;border-radius:999px;font-size:12px;border:1px solid #fde68a;background:#fffbeb;color:#92400e;display:none}
-    .adminRow{display:none; align-items:center; gap:8px;}
-    .adminRow input{max-width:420px}
-  </style>
-</head>
-<body>
-  <div class="container">
-    <div class="header">
-      <div class="logo">$</div>
-      <div>
-        <h1 style="margin:0">Instant Quote — SDL <span id="adminTag" class="adminTag">Admin mode</span></h1>
-        <div class="muted">Step 1: Upload Links → Step 2: Quote Review → Step 3: Approve & Pay</div>
-        <div id="adminRow" class="adminRow">
-          <label class="muted" for="apiUrl">Backend URL</label>
-          <input id="apiUrl" class="input" placeholder="https://your-backend.example.com" />
-          <button id="saveApi" class="btn btn-ghost">Use</button>
-        </div>
-      </div>
-      <span id="health" class="muted" style="margin-left:auto"></span>
-    </div>
-
-    <div class="note note-info">This tool gives you an instant landed-cost estimate for your special order. <b>Please note:</b> quotes are for <u>ocean freight</u> shipments only.</div>
-
-    <div class="steps">
-      <div class="step active" id="b1"><div class="dot"></div>1. Upload Links</div>
-      <div class="step" id="b2"><div class="dot"></div>2. Quote Review</div>
-      <div class="step" id="b3"><div class="dot"></div>3. Approve & Pay</div>
-    </div>
-
-    <!-- STEP 1 (Upload Links) -->
-    <section id="s1" class="card">
-      <div class="pad">
-        <p class="muted">Paste product links below (one per line). We’ll fetch titles and prices and prepare a quote.</p>
-        <div class="note note-warn">⚠️ Please ensure you select the correct <b>product variant</b> (size, color, finish, etc.) before copying the link. SDL cannot be held responsible for incorrect or incomplete links provided.</div>
-        <div class="row">
-          <div class="col">
-            <label for="links">Product links</label>
-            <textarea id="links" placeholder="https://example.com/item-1
-https://example.com/item-2"></textarea>
-          </div>
-          <div class="col">
-            <input id="rate" type="hidden" value="6.00" />
-            <input id="volume" type="hidden" value="11.33" />
-          </div>
-        </div>
-        <div style="margin-top:12px">
-          <label style="display:flex;align-items:center;gap:8px">
-            <input type="checkbox" id="confirmLinks" />
-            <span>I confirm I’ve selected the correct product variants and provided accurate links.</span>
-          </label>
-        </div>
-      </div>
-      <div class="footer">
-        <button id="start" class="btn btn-primary" disabled>Get Quote</button>
-      </div>
-    </section>
-
-    <!-- STEP 2 (Quote Review) -->
-    <section id="s2" class="card" style="margin-top:16px; display:none">
-      <div class="pad">
-        <div style="display:flex;align-items:center;gap:12px"><h2 style="margin:0">Quote Review</h2></div>
-        <div id="err" style="color:#b91c1c;font-weight:700;display:none;margin-top:8px"></div>
-        <div style="overflow:auto;margin-top:10px">
-          <table id="tbl">
-            <thead id="thead-simple">
-              <tr><th>Item</th><th>Qty</th><th>Unit</th><th>Total</th></tr>
-            </thead>
-            <thead id="thead-admin" style="display:none">
-              <tr><th>Item</th><th>Qty</th><th>First Cost</th><th>Shipping &amp; Handling</th><th>Duty + Wharfage</th><th>Unit Landed</th><th>Total</th></tr>
-            </thead>
-            <tbody></tbody>
-            <tfoot>
-              <tr><td colspan="3">Subtotal</td><td id="subtotal">$0.00</td></tr>
-            </tfoot>
-          </table>
-        </div>
-      </div>
-      <div class="footer">
-        <button id="back1" class="btn btn-ghost">Back</button>
-        <button id="approve" class="btn btn-primary">Approve this Quote</button>
-      </div>
-    </section>
-
-    <!-- STEP 3 (Approve & Pay) -->
-    <section id="s3" class="card" style="margin-top:16px; display:none">
-      <div class="pad">
-        <h2 style="margin:0 0 6px">Approve & Pay</h2>
-        <p class="muted">Review your order summary below. Once approved, you’ll receive a checkout link.</p>
-        <div id="summary" class="card" style="background:#fff;margin-top:8px"><div class="pad">Loading…</div></div>
-      </div>
-      <div class="footer">
-        <button id="back2" class="btn btn-ghost">Back to review</button>
-        <button id="checkout" class="btn btn-primary">Checkout</button>
-      </div>
-    </section>
-  </div>
-
-  <script>
-    // === API helper with runtime override ===
-    function getAPI(){
-      const ls = localStorage.getItem('sdl_api_url');
-      if (ls) return ls.replace(/\/$/, '');
-      if (window.API_URL_OVERRIDE) return String(window.API_URL_OVERRIDE).replace(/\/$/, '');
-      // Default to your working Railway backend:
-      return 'https://so-quote-production.up.railway.app';
-    }
-
-    const ADMIN = /[?&](admin|debug)=1/.test(location.search);
-    const WHARFAGE_PER_UNIT = 0;
-
-    const S1=document.getElementById('s1'),S2=document.getElementById('s2'),S3=document.getElementById('s3');
-    const B1=document.getElementById('b1'),B2=document.getElementById('b2'),B3=document.getElementById('b3');
-    const setStep=n=>{[S1,S2,S3].forEach((el,i)=>el.style.display=(i===n-1?'block':'none'));[B1,B2,B3].forEach((el,i)=>el.classList.toggle('active',i===n-1));window.scrollTo({top:0,behavior:'smooth'});};
-
-    // Admin UI for API override
-    if(ADMIN){
-      document.getElementById('adminTag').style.display='inline-block';
-      const row = document.getElementById('adminRow');
-      row.style.display='flex';
-      const apiInput = document.getElementById('apiUrl');
-      apiInput.value = getAPI();
-      document.getElementById('saveApi').onclick = ()=>{
-        const v = apiInput.value.trim();
-        if(!v){ alert('Enter a backend URL'); return; }
-        localStorage.setItem('sdl_api_url', v);
-        location.reload();
-      };
-    }
-
-    // Health check
-    fetch(getAPI()+'/health')
-      .then(r=>r.json())
-      .then(j=>{document.getElementById('health').textContent=`Backend: ${j.version||'ok'} (${j.calc||'calc'})`;})
-      .catch(()=>{document.getElementById('health').textContent='Backend: offline';});
-
-    const fmt=n=>`$${(Math.round(n*100)/100).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}`;
-
-    let quote=null;
-
-    const confirmLinks=document.getElementById('confirmLinks');
-    const startBtn=document.getElementById('start');
-    confirmLinks.addEventListener('change',()=>{startBtn.disabled=!confirmLinks.checked;});
-
-    startBtn.onclick=async()=>{
-      const linksRaw=document.getElementById('links').value.trim();
-      const rate=parseFloat(document.getElementById('rate').value||'6.00');
-      const volume=parseFloat(document.getElementById('volume').value||'11.33');
-      if(!linksRaw){ alert('Please paste at least one link.'); return; }
-      setStep(2);
-      try{
-        const body = { links: linksRaw.split(/\n+/).map(s=>s.trim()).filter(Boolean), opts: { defaultRate: rate, defaultVolume: volume } };
-        const res = await fetch(getAPI()+'/quote', { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) });
-        if(!res.ok){
-          let msg='There was a problem generating your quote.';
-          try{ const ej = await res.json(); if(ej && (ej.error||ej.message)) msg = ej.error||ej.message; }catch{}
-          throw new Error(msg);
-        }
-        const data = await res.json();
-        quote = normalize(data, rate, volume);
-        render(quote);
-      }catch(e){
-        const box=document.getElementById('err');
-        box.style.display='block';
-        box.textContent=e.message||'There was a problem generating your quote.';
-      }
-    };
-
-    function normalize(data,rate,volume){
-      if(data && Array.isArray(data.items)){
-        data.items = data.items.map((it,i)=>{
-          const qty = Number(it.qty||1);
-          const first = Number(it.firstCost ?? it.unitPrice ?? it.price ?? 0);
-          const ft3 = Number(it.ft3 ?? it.volume ?? volume ?? 11.33);
-          const freight = Number(it.freight ?? (ft3*rate));
-          const fees = Number(it.fees ?? 148/(it.batchQty||qty));
-          const duty = Number(it.duty ?? (first*0.25));
-          const dutyWharf = duty + WHARFAGE_PER_UNIT;
-          const unitLanded = Number(it.unitLanded ?? (first+freight+fees+duty));
-          const total = Number(it.total ?? qty*unitLanded);
-          return { title: it.title||it.name||`Item ${i+1}`, qty, firstCost:first, unit:first, ft3, freight, fees, duty, dutyWharf, unitLanded, total };
-        });
-        data.subtotal = Number(data.subtotal ?? data.items.reduce((s,x)=>s+x.total,0));
-        return data;
-      }
-      const items = (data||[]).map((it,i)=>{
-        const qty = Number(it.qty||1);
-        const first = Number(it.firstCost ?? it.unitPrice ?? it.price ?? 0);
-        const ft3 = Number(it.ft3 ?? it.volume ?? volume ?? 11.33);
-        const freight = ft3*rate;
-        const fees = Number(it.fees || 148/(it.batchQty||qty));
-        const duty = Number(it.duty || (first*0.25));
-        const dutyWharf = duty + WHARFAGE_PER_UNIT;
-        const unitLanded = first + freight + fees + duty;
-        const total = qty * unitLanded;
-        return { title: it.title||it.name||`Item ${i+1}`, qty, firstCost:first, unit:first, ft3, freight, fees, duty, dutyWharf, unitLanded, total };
-      });
-      return { items, subtotal: items.reduce((s,x)=>s+x.total,0) };
-    }
-
     function render(q){
       const tbody=document.querySelector('#tbl tbody');
       const theadSimple=document.getElementById('thead-simple');
@@ -243,62 +6,60 @@ https://example.com/item-2"></textarea>
       theadSimple.style.display = ADMIN ? 'none' : '';
       theadAdmin.style.display = ADMIN ? '' : 'none';
       tbody.innerHTML='';
+
       q.items.forEach((it,idx)=>{
         const first = it.firstCost ?? Number(it.unit || 0);
-        const shipHandling = (it.freight||0) + (it.fees||0);
-        const dutyWharf = (it.duty||0) + (it.dutyWharf? (it.dutyWharf - (it.duty||0)) : 0);
-        const unitLanded = ADMIN ? (first + shipHandling + dutyWharf) : (it.unitLanded ?? first + shipHandling + dutyWharf);
-        const total = (it.total ?? it.qty * unitLanded);
+        const unitLanded = it.unitLanded ?? (first+(it.freight||0)+(it.fees||0)+(it.duty||0));
+        const total = it.total ?? (it.qty * unitLanded);
+
         const tr=document.createElement('tr');
-        if(ADMIN){
+
+        // --- if no price was scraped, show manual input box ---
+        if(first <= 0){
           tr.innerHTML=`<td>${it.title}</td>
-            <td><input type="number" min="1" value="${it.qty}" data-i="${idx}" class="input qty" style="max-width:90px"></td>
-            <td>${fmt(first)}</td>
-            <td>${fmt(shipHandling)}</td>
-            <td>${fmt(dutyWharf)}</td>
-            <td>${fmt(unitLanded)}</td>
+            <td><input type="number" min="1" value="${it.qty}" data-i="${idx}" class="input qty" style="max-width:70px"></td>
+            <td><input type="number" min="1" placeholder="Enter price" data-i="${idx}" class="input price" style="max-width:120px"></td>
             <td class="rowtotal">${fmt(total)}</td>`;
         } else {
           tr.innerHTML=`<td>${it.title}</td>
-            <td><input type="number" min="1" value="${it.qty}" data-i="${idx}" class="input qty" style="max-width:90px"></td>
+            <td><input type="number" min="1" value="${it.qty}" data-i="${idx}" class="input qty" style="max-width:70px"></td>
             <td>${fmt(unitLanded)}</td>
             <td class="rowtotal">${fmt(total)}</td>`;
         }
+
         tbody.appendChild(tr);
-        it.firstCost = first; it.shipHandling = shipHandling; it.dutyWharf = dutyWharf; it.unitLanded = unitLanded; it.total = total;
+        it.unitLanded = unitLanded;
+        it.total = total;
       });
+
       const sub = q.subtotal ?? q.items.reduce((s,x)=>s+(x.total||0),0);
       q.subtotal = sub;
       document.getElementById('subtotal').textContent=fmt(sub);
 
+      // --- handle qty changes ---
       tbody.querySelectorAll('input.qty').forEach(inp=>{
         inp.addEventListener('input',e=>{
           const i=Number(e.target.dataset.i);
           const qty=Math.max(1,Number(e.target.value||1));
           quote.items[i].qty=qty;
-          quote.items[i].total=qty*(quote.items[i].unitLanded);
+          quote.items[i].total=qty*(quote.items[i].unitLanded||0);
+          e.target.closest('tr').querySelector('.rowtotal').textContent=fmt(quote.items[i].total);
+          quote.subtotal=quote.items.reduce((s,x)=>s+(x.total||0),0);
+          document.getElementById('subtotal').textContent=fmt(quote.subtotal);
+        });
+      });
+
+      // --- handle manual price input ---
+      tbody.querySelectorAll('input.price').forEach(inp=>{
+        inp.addEventListener('input',e=>{
+          const i=Number(e.target.dataset.i);
+          const price=Math.max(1,Number(e.target.value||0));
+          quote.items[i].firstCost = price;
+          quote.items[i].unitLanded = price + (quote.items[i].freight||0)+(quote.items[i].fees||0)+(quote.items[i].duty||0);
+          quote.items[i].total = (quote.items[i].qty||1) * quote.items[i].unitLanded;
           e.target.closest('tr').querySelector('.rowtotal').textContent=fmt(quote.items[i].total);
           quote.subtotal=quote.items.reduce((s,x)=>s+(x.total||0),0);
           document.getElementById('subtotal').textContent=fmt(quote.subtotal);
         });
       });
     }
-
-    document.getElementById('back1').onclick=()=>setStep(1);
-    document.getElementById('approve').onclick=()=>{buildSummary();setStep(3);};
-    document.getElementById('back2').onclick=()=>setStep(2);
-
-    function buildSummary(){
-      let html = '<div class="pad"><table style="width:100%;border-collapse:collapse">';
-      html += '<thead><tr><th style="text-align:left">Item</th><th style="text-align:right">Qty</th><th style="text-align:right">Total</th></tr></thead><tbody>';
-      quote.items.forEach(i=>{
-        html += `<tr><td>${i.title}</td><td style="text-align:right">${i.qty}</td><td style="text-align:right">${fmt(i.total)}</td></tr>`;
-      });
-      html += `</tbody><tfoot><tr><td colspan="2"><b>Subtotal</b></td><td style="text-align:right"><b>${fmt(quote.subtotal)}</b></td></tr></tfoot></table></div>`;
-      document.getElementById('summary').innerHTML = html;
-    }
-
-    document.getElementById('checkout').onclick=()=>{alert('Checkout will create a Shopify draft order in the live build. Subtotal = '+fmt(quote.subtotal));};
-  </script>
-</body>
-</html>
