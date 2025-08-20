@@ -1,4 +1,4 @@
-// scraper.js (CommonJS) — Ashley-specific fallback first, robust price regex
+// scraper.js (CommonJS) — hardened price extractor with Ashley-first fallback
 const cheerio = require("cheerio");
 
 const FALLBACK_HTTP  = "https://r.jina.ai/http://";
@@ -7,7 +7,7 @@ const FALLBACK_HTTPS = "https://r.jina.ai/https://";
 const CURRENCY_RE = /\$\s*\d[\d,\.]*/;
 const ACCESS_RE   = /access to this page has been denied|verify you are human|blocked/i;
 
-// Keys we often see in embedded JSON
+// Common JSON-in-HTML keys we often see
 const JSON_PRICE_KEYS = [
   /"salePrice"\s*:\s*"?([\d.,]+)"?/i,
   /"price"\s*:\s*"?([\d.,]+)"?/i,
@@ -15,29 +15,17 @@ const JSON_PRICE_KEYS = [
   /"offerPrice"\s*:\s*"?([\d.,]+)"?/i
 ];
 
-function toNum(s) {
-  const n = parseFloat(String(s).replace(/[^0-9.]/g, ""));
-  return Number.isFinite(n) ? n : 0;
-}
-
-function firstCurrency(text) {
-  const m = text.match(CURRENCY_RE);
-  return m ? toNum(m[0]) : 0;
-}
-
-function fallbackUrl(url) {
-  const bare = url.replace(/^https?:\/\//i, "");
-  return (url.startsWith("https://") ? FALLBACK_HTTPS : FALLBACK_HTTP) + bare;
-}
+function toNum(s) { const n = parseFloat(String(s).replace(/[^0-9.]/g, "")); return Number.isFinite(n) ? n : 0; }
+function firstCurrency(text) { const m = text.match(CURRENCY_RE); return m ? toNum(m[0]) : 0; }
+function fallbackUrl(url) { const bare = url.replace(/^https?:\/\//i, ""); return (url.startsWith("https://") ? FALLBACK_HTTPS : FALLBACK_HTTP) + bare; }
+function titleFromText(text) { const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean); return lines.find(s => s.length > 10 && s.length < 140) || "Item"; }
 
 async function fetchHtml(url) {
   const res = await fetch(url, {
     redirect: "follow",
     headers: {
-      "user-agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "accept":
-        "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
       "accept-language": "en-US,en;q=0.9",
       "upgrade-insecure-requests": "1",
       "cache-control": "no-cache",
@@ -49,16 +37,26 @@ async function fetchHtml(url) {
   return { status: res.status, html };
 }
 
+function scanJsonForPrice(html) {
+  for (const rx of JSON_PRICE_KEYS) {
+    const m = html.match(rx);
+    if (m && m[1]) {
+      const v = toNum(m[1]);
+      if (v) return v;
+    }
+  }
+  return 0;
+}
+
 function extractFromDom(html) {
   const $ = cheerio.load(html);
 
   const title =
     $("h1").first().text().trim() ||
     $('meta[property="og:title"]').attr("content") ||
-    $("title").first().text().trim() ||
-    "Item";
+    $("title").first().text().trim() || "Item";
 
-  // JSON-LD offers
+  // JSON-LD offers first (often reliable)
   let ldPrice = 0;
   $('script[type="application/ld+json"]').each((_, s) => {
     try {
@@ -74,11 +72,10 @@ function extractFromDom(html) {
   });
   if (ldPrice) return { title, price: ldPrice };
 
-  // “Sale/Now”
-  const saleText = $('*:contains("Sale"), *:contains("Now")')
+  // “Sale/Now/Today $…”
+  const saleText = $('*:contains("Sale"), *:contains("Now"), *:contains("Today")')
     .filter((_, el) => CURRENCY_RE.test($(el).text()))
-    .first()
-    .text();
+    .first().text();
   if (saleText) {
     const n = firstCurrency(saleText);
     if (n) return { title, price: n };
@@ -100,35 +97,18 @@ function extractFromDom(html) {
   const n = firstCurrency(block);
   if (n) return { title, price: n };
 
-  // Anywhere
+  // Anywhere in body
   const any = firstCurrency($("body").text());
   if (any) return { title, price: any };
 
   return { title, price: 0 };
 }
 
-function scanJsonForPrice(html) {
-  for (const rx of JSON_PRICE_KEYS) {
-    const m = html.match(rx);
-    if (m && m[1]) {
-      const v = toNum(m[1]);
-      if (v) return v;
-    }
-  }
-  return 0;
-}
-
-function titleFromText(text) {
-  const lines = text.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
-  return lines.find(s => s.length > 10 && s.length < 140) || "Item";
-}
-
-/** Main entry */
 async function scrapeProduct(url) {
   try {
     const host = new URL(url).hostname;
 
-    // --- Ashley: go straight to text-render fallback first (bypass block) ---
+    // --- Ashley: go straight to text-render fallback first ---
     if (host.includes("ashleyfurniture.com")) {
       const fbRes = await fetch(fallbackUrl(url), { headers: { "accept-language": "en-US,en;q=0.9" } });
       const text = await fbRes.text();
@@ -139,16 +119,17 @@ async function scrapeProduct(url) {
         const n = firstCurrency(sale[0]);
         if (n) return { title: titleFromText(text), firstCost: n, url };
       }
-      // Embedded JSON price
+
+      // Embedded JSON price keys
       const jp = scanJsonForPrice(text);
       if (jp) return { title: titleFromText(text), firstCost: jp, url };
 
-      // First currency on page
+      // First currency anywhere
       const any = firstCurrency(text);
       return { title: titleFromText(text), firstCost: any || 0, url };
     }
 
-    // --- All others: normal flow with headers, then fallback ---
+    // --- Others: DOM attempt first, then fallback ---
     const { status, html } = await fetchHtml(url);
     const dom = extractFromDom(html);
     let price = dom.price || scanJsonForPrice(html);
