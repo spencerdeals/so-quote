@@ -1,39 +1,37 @@
-// index.js (backend for SO-Quote)
-import express from "express";
-import cors from "cors";
-import { scraperProduct } from "./scraper.js";
+const express = require("express");
+const cors = require("cors");
+const { scrapeProduct } = require("./scraper");
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
 app.use(cors());
 app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
 
-// Health check
 app.get("/health", (_req, res) => {
   res.json({ ok: true, version: "3.3-container", calc: "landed-v1" });
 });
 
-// Quote endpoint
 app.post("/quote", async (req, res) => {
   try {
-    const { links = [] } = req.body;
+    const links = Array.isArray(req.body?.links) ? req.body.links.filter(Boolean) : [];
+    if (!links.length) return res.status(400).json({ error: "Provide links[] in request body" });
 
-    if (!Array.isArray(links) || links.length === 0) {
-      return res.status(400).json({ error: "No links provided" });
-    }
-
-    // Scrape each product
     const items = [];
-    for (let url of links) {
-      const scraped = await scraperProduct(url);
-      items.push(scraped);
+    for (const url of links) {
+      const { title, firstCost } = await scrapeProduct(url);
+      items.push({ title, url, qty: 1, firstCost });
     }
 
-    res.json({ items, subtotal: items.reduce((s, i) => s + (i.price || 0), 0) });
-  } catch (err) {
-    console.error("Quote error:", err);
-    res.status(500).json({ error: "Failed to generate quote" });
+    const subtotal = Math.round(items.reduce((s, it) => s + (it.firstCost * (it.qty || 1)), 0) * 100) / 100;
+    res.json({ items, subtotal });
+  } catch (e) {
+    console.error("quote error:", e?.message || e);
+    res.status(500).json({ error: "Server error generating quote." });
   }
 });
 
-const PORT = process.env.PORT || 8080;
-app.listen(PORT, () => console.log(`SO-Quote backend running on ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`[SO-QUOTE] Backend running on :${PORT}`);
+});
