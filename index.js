@@ -1,96 +1,97 @@
-// index.js — SDL Quote API with CORS + real price scraper
+// index.js — SO-Quote backend: CORS + JSON /health + real price scraper
 const express = require("express");
 const cheerio = require("cheerio");
+
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* ---------- CORS FIRST ---------- */
+/* ---------------- CORS (must be first) ---------------- */
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");  // lock to your frontend later if you wish
+  res.setHeader("Access-Control-Allow-Origin", "*"); // lock to your frontend later if you wish
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
   res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
-/* ---------- Parsers ---------- */
+/* ---------------- Parsers ---------------- */
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-/* ---------- Health ---------- */
+/* ---------------- Health ---------------- */
 app.get("/health", (_req, res) => {
   res.json({ ok: true, version: "3.3-container", calc: "landed-v1" });
 });
 
-/* ---------- Helpers ---------- */
+/* ---------------- Helpers ---------------- */
 const round = n => Math.round((Number(n) || 0) * 100) / 100;
 
 /**
- * Robust price extraction:
- * 1) Prefer "Sale" price text on page
- * 2) Otherwise find first $"1234.56" text in common price containers
+ * Extract price from HTML using common Crate&Barrel/retail patterns:
+ * 1) Prefer "Sale $X" text
+ * 2) Look in common price containers
  * 3) Fallback to JSON-LD offers.price
  */
 function extractPrice($) {
-  // 1) Try an explicit "Sale" context (Crate & Barrel shows "Sale $1,954.00")
-  const saleText = $('*:contains("Sale")').filter((_, el) => $(el).text().trim().match(/\$\d[\d,\.]*/)).first().text();
-  if (saleText) {
-    const m = saleText.match(/\$\d[\d,\.]*/);
+  // 1) "Sale $1,954.00" style text
+  const saleNode = $('*:contains("Sale")')
+    .filter((_, el) => /\$\s*\d[\d,\.]*/.test($(el).text()))
+    .first();
+  if (saleNode.length) {
+    const m = saleNode.text().match(/\$\s*\d[\d,\.]*/);
     if (m) return parseFloat(m[0].replace(/[^0-9.]/g, ""));
   }
 
-  // 2) Look in common price containers
-  const candidates = [
+  // 2) Common price containers
+  const priceContainers = [
     '[data-testid*="price"]',
     '[class*="price"]',
     '[class*="Price"]',
     '.price', '.sale', '.product-price'
   ].join(",");
-
-  const containerText = $(candidates).text();
+  const containerText = $(priceContainers).text();
   const m2 = containerText.match(/\$\s*\d[\d,\.]*/);
   if (m2) return parseFloat(m2[0].replace(/[^0-9.]/g, ""));
 
-  // 3) JSON-LD
-  const ld = $('script[type="application/ld+json"]').map((_, s) => $(s).html()).get();
-  for (const block of ld) {
+  // 3) JSON-LD offers
+  const ldBlocks = $('script[type="application/ld+json"]').map((_, s) => $(s).html()).get();
+  for (const block of ldBlocks) {
     try {
       const data = JSON.parse(block);
-      // handle both single object and array of objects
-      const candidates = Array.isArray(data) ? data : [data];
-      for (const d of candidates) {
-        if (d && d.offers && (d.offers.price || (Array.isArray(d.offers) && d.offers[0]?.price))) {
-          const p = d.offers.price || d.offers[0].price;
-          const priceNum = parseFloat(String(p).replace(/[^0-9.]/g, ""));
-          if (!Number.isNaN(priceNum) && priceNum > 0) return priceNum;
+      const arr = Array.isArray(data) ? data : [data];
+      for (const d of arr) {
+        if (d?.offers) {
+          if (Array.isArray(d.offers) && d.offers[0]?.price) {
+            const p = parseFloat(String(d.offers[0].price).replace(/[^0-9.]/g, ""));
+            if (!Number.isNaN(p) && p > 0) return p;
+          }
+          if (d.offers.price) {
+            const p = parseFloat(String(d.offers.price).replace(/[^0-9.]/g, ""));
+            if (!Number.isNaN(p) && p > 0) return p;
+          }
         }
       }
-    } catch {}
+    } catch { /* ignore JSON parse errors */ }
   }
 
   return null;
 }
 
 function extractTitle($) {
-  const t = $('h1').first().text().trim() || $('title').first().text().trim();
-  return t || "Item";
+  return $('h1').first().text().trim() || $('title').first().text().trim() || "Item";
 }
 
-/**
- * Fetch a single product page and extract its first cost
- */
+/** Fetch a product page and extract first cost + title */
 async function fetchItem(url) {
   try {
     const res = await fetch(url, {
       headers: {
-        // Be polite + avoid some bot blocks
         "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
         "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
       }
     });
     const html = await res.text();
     const $ = cheerio.load(html);
-
     const firstCost = extractPrice($) ?? 0;
     const title = extractTitle($);
     return { title, firstCost };
@@ -100,12 +101,10 @@ async function fetchItem(url) {
   }
 }
 
-/* ---------- /quote ---------- */
-/**
- * Expected body:
- * { links: ["https://site/product1", "..."], opts: { defaultRate, defaultVolume } }
- * We return items with firstCost; your frontend normalizer will add freight/fees/duty.
- */
+/* ---------------- /quote ----------------
+   Body: { links: ["https://..."], opts?: { defaultRate, defaultVolume } }
+   We return items with firstCost; your frontend adds freight/fees/duty.
+------------------------------------------------ */
 app.post("/quote", async (req, res) => {
   try {
     const links = Array.isArray(req.body?.links) ? req.body.links.filter(Boolean) : [];
@@ -123,7 +122,7 @@ app.post("/quote", async (req, res) => {
       });
     }
 
-    // Subtotal here is just the base cost sum; your frontend will layer freight/fees/duty.
+    // Subtotal of base costs (frontend layers freight/fees/duty)
     const subtotal = round(items.reduce((s, it) => s + (it.firstCost * (it.qty || 1)), 0));
     res.json({ items, subtotal });
   } catch (e) {
@@ -132,7 +131,7 @@ app.post("/quote", async (req, res) => {
   }
 });
 
-/* ---------- Start ---------- */
+/* ---------------- Start ---------------- */
 app.listen(PORT, () => {
   console.log(`[SO-QUOTE] Backend running on :${PORT}`);
 });
