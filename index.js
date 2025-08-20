@@ -1,33 +1,25 @@
-// FULL PASTE-AND-REPLACE BACKEND (CommonJS) — so-quote/index.js
-// Purpose: provide /meta endpoint to return product names for given URLs
-// Run: npm start
-// Env: PORT (optional)
-
-const express = require("express");
-const cors = require("cors");
-const { request } = require("undici");
-const cheerio = require("cheerio");
+// backend/index.js — Instant Import V5 backend
+import express from "express";
+import cors from "cors";
+import { request } from "undici";
+import * as cheerio from "cheerio";
 
 const app = express();
 
-// CORS: allow all by default; tighten to your domain if needed
+// allow CORS from anywhere (adjust if needed)
 app.use(cors({ origin: true }));
 
-app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, service: "so-quote-meta", version: "1.0.0" });
-});
-
-// GET /meta?url=https://example.com/product/123
+// ===== /meta — fetch product title from a product URL =====
 app.get("/meta", async (req, res) => {
   const url = req.query.url;
-  if (!url) return res.status(400).json({ error: "Missing url" });
+  if (!url) return res.status(400).json({ name: null, error: "Missing url" });
 
   try {
-    const { body, statusCode } = await request(url, {
+    const { body } = await request(url, {
       headers: {
         "User-Agent":
           "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-        "Accept":
+        Accept:
           "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
         "Accept-Language": "en-US,en;q=0.9",
       },
@@ -37,19 +29,17 @@ app.get("/meta", async (req, res) => {
     const html = await body.text();
     const $ = cheerio.load(html);
 
-    // 1) OpenGraph / twitter
+    // Try common meta tags
     let name =
       $('meta[property="og:title"]').attr("content") ||
       $('meta[name="og:title"]').attr("content") ||
       $('meta[name="twitter:title"]').attr("content");
 
-    // 2) schema.org Product name
+    // Try JSON-LD Product if needed
     if (!name) {
       $('script[type="application/ld+json"]').each((_, el) => {
         try {
-          const raw = $(el).contents().text();
-          if (!raw) return;
-          const json = JSON.parse(raw);
+          const json = JSON.parse($(el).contents().text());
           const stack = Array.isArray(json) ? json : [json];
           outer: for (const node of stack) {
             const queue = [node];
@@ -70,27 +60,30 @@ app.get("/meta", async (req, res) => {
       });
     }
 
-    // 3) Fallback to H1 or <title>
+    // Fallback to h1 or title
     if (!name) {
       name = $("h1").first().text().trim() || $("title").first().text().trim();
     }
 
-    // 4) Cleanup
+    // Clean noisy suffixes
     if (name) {
       name = name.replace(/\s+/g, " ").trim();
-      // Strip store name suffixes: e.g., " - Amazon"
-      name = name.replace(/\s*[\-|·|•|–|—]\s*(Amazon|Wayfair|Target|Crate & Barrel|Walmart|IKEA).*/i, "").trim();
+      name = name.replace(/\s*[-–—·•]\s*(Amazon|Wayfair|Target|Crate & Barrel).*/i, "").trim();
     }
 
-    return res.json({ name: name || null, statusCode });
+    return res.json({ name: name || null });
   } catch (err) {
-    console.error("meta fetch error", err?.message || err);
-    // Soft-fail: return null so frontend keeps placeholder
+    console.error("meta error:", err?.message || err);
     return res.json({ name: null });
   }
 });
 
+// Health check — must say "Instant Import V5"
+app.get(["/", "/health"], (_req, res) => {
+  res.json({ ok: true, service: "Instant Import V5" });
+});
+
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log(`so-quote meta server listening on :${PORT}`);
+  console.log(`Instant Import V5 server running on port ${PORT}`);
 });
