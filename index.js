@@ -1,10 +1,10 @@
-// index.js – SO-Quote backend using scraper (CommonJS)
+// index.js – SO-Quote backend using scraper (CommonJS) + route listing
 const express = require("express");
 const cors = require("cors");
-const { scrapeProduct } = require("./scraper");   // <-- make sure scraper.js is beside this file
+const { scrapeProduct } = require("./scraper");
 
 const app = express();
-const PORT = process.env.PORT || 8080;            // Railway will set PORT; default to 8080
+const PORT = process.env.PORT || 8080;
 
 app.use(cors());
 app.use(express.json());
@@ -47,6 +47,19 @@ app.post("/quote", async (req, res) => {
   }
 });
 
+// --- Helper: list routes so we can see what's registered ---
+function listRoutes(app) {
+  const routes = [];
+  app._router.stack.forEach(layer => {
+    if (layer.route && layer.route.path) {
+      const methods = Object.keys(layer.route.methods).join(",").toUpperCase();
+      routes.push(`${methods} ${layer.route.path}`);
+    }
+  });
+  console.log("[SO-QUOTE] Routes:", routes.join(" | "));
+}
+
 app.listen(PORT, () => {
   console.log(`[SO-QUOTE] Backend running on :${PORT}`);
+  listRoutes(app); // <— will print /health, /test-scrape, /quote
 });
