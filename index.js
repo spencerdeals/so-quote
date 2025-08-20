@@ -1,21 +1,27 @@
-// index.js – SO-Quote backend using scraper (CommonJS) + route listing
+// index.js – SO-Quote backend (CommonJS) with route inspector
 const express = require("express");
 const cors = require("cors");
 const { scrapeProduct } = require("./scraper");
 
 const app = express();
 const PORT = process.env.PORT || 8080;
+const VERSION = "so-quote@v23"; // <— bump this if needed to confirm redeploy
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Health (frontend expects JSON)
+// --- Health ---
 app.get("/health", (_req, res) => {
-  res.json({ ok: true, version: "3.3-container", calc: "landed-v1" });
+  res.json({ ok: true, version: "3.3-container", calc: "landed-v1", api: VERSION });
 });
 
-// Quick test route to verify scraper is working independently of the frontend
+// --- Quick homepage (shows version) ---
+app.get("/", (_req, res) => {
+  res.send(`SO-Quote API running (${VERSION})`);
+});
+
+// --- Test scraper directly ---
 app.get("/test-scrape", async (req, res) => {
   const url = req.query.url;
   if (!url) return res.status(400).json({ error: "Missing ?url=" });
@@ -27,7 +33,7 @@ app.get("/test-scrape", async (req, res) => {
   }
 });
 
-// Main quote endpoint used by the frontend
+// --- Frontend endpoint ---
 app.post("/quote", async (req, res) => {
   try {
     const links = Array.isArray(req.body?.links) ? req.body.links.filter(Boolean) : [];
@@ -47,19 +53,18 @@ app.post("/quote", async (req, res) => {
   }
 });
 
-// --- Helper: list routes so we can see what's registered ---
-function listRoutes(app) {
+// --- Route inspector so we can SEE what’s running ---
+app.get("/__routes", (_req, res) => {
   const routes = [];
   app._router.stack.forEach(layer => {
     if (layer.route && layer.route.path) {
       const methods = Object.keys(layer.route.methods).join(",").toUpperCase();
-      routes.push(`${methods} ${layer.route.path}`);
+      routes.push({ methods, path: layer.route.path });
     }
   });
-  console.log("[SO-QUOTE] Routes:", routes.join(" | "));
-}
+  res.json({ version: VERSION, routes });
+});
 
 app.listen(PORT, () => {
-  console.log(`[SO-QUOTE] Backend running on :${PORT}`);
-  listRoutes(app); // <— will print /health, /test-scrape, /quote
+  console.log(`[SO-QUOTE] Backend running on :${PORT} (${VERSION})`);
 });
