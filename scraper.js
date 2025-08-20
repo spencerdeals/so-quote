@@ -1,4 +1,3 @@
-// scraper.js (CommonJS) — robust retail price extractor (Ashley, C&B, etc.)
 const cheerio = require("cheerio");
 
 // Node 18+ has global fetch
@@ -20,7 +19,7 @@ async function scrapeProduct(url) {
       $("title").first().text().trim() ||
       "Item";
 
-    // 1) Prefer SALE / NOW price (Ashley & Crate often show "Sale $1,954.00")
+    // 1) Prefer SALE / NOW price text
     const saleNode = $('*:contains("Sale"), *:contains("Now"), *:contains("Today")')
       .filter((_, el) => /\$\s*\d[\d,\.]*/.test($(el).text()))
       .first();
@@ -41,7 +40,7 @@ async function scrapeProduct(url) {
       ".price", ".sale", ".salesprice", ".product-price", ".final-price",
       'meta[itemprop="price"]', 'meta[property="product:price:amount"]'
     ].join(",");
-    // direct meta content price
+
     const metaPrice =
       Number($('meta[itemprop="price"]').attr("content")) ||
       Number($('meta[property="product:price:amount"]').attr("content")) || 0;
@@ -83,7 +82,7 @@ async function scrapeProduct(url) {
     return { title, firstCost: 0, url };
   } catch (e) {
     console.error("scrapeProduct error:", e?.message || e);
-    return { title: "Item", firstCost: 0, url };
+    return { title, firstCost: 0, url };
   }
 }
 
