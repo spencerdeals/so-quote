@@ -8,7 +8,7 @@ const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+ƒapp.use(express.urlencoded({ extended: true }));
 
 app.get("/health", (_req, res) => {
   res.json({ ok: true, version: "3.3-container", calc: "landed-v1" });
@@ -30,6 +30,17 @@ app.post("/quote", async (req, res) => {
   } catch (e) {
     console.error("quote error:", e?.message || e);
     res.status(500).json({ error: "Server error generating quote." });
+  }
+});
+// Quick test route to verify scraper works independently of the frontend
+app.get("/test-scrape", async (req, res) => {
+  const url = req.query.url;
+  if (!url) return res.status(400).json({ error: "Missing ?url=" });
+  try {
+    const data = await scrapeProduct(url);
+    res.json(data);
+  } catch (e) {
+    res.status(500).json({ error: e?.message || String(e) });
   }
 });
 
