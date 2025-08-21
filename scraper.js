@@ -11,6 +11,7 @@ export function extractProductInfo(html, url) {
   let titleSource = null;
   const jsonld = parseJsonLdProduct($);
 
+  
   if (jsonld?.name) {
     title = clean(jsonld.name);
     titleSource = "jsonld.product.name";
