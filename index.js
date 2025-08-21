@@ -1,59 +1,67 @@
-// index.js — so-quote BACK-END (clean ESM)
-// Focus: titles + variants + best-effort price. Works with scraper.js.
-// Do not rename files — matches your repo exactly.
+// index.js — CommonJS server with lazy-loaded scraper route
 
-import express from "express";
-import cors from "cors";
-import bodyParser from "body-parser";
-import fetch from "node-fetch";
-import { extractProductInfo } from "./scraper.js";
-
-// Ensure global fetch for libraries that expect it
-if (!globalThis.fetch) globalThis.fetch = fetch;
+const express = require("express");
+const cors = require("cors");
+const morgan = require("morgan");
+require("dotenv").config();
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+app.disable("x-powered-by");
+app.use(cors({ origin: "*" }));
+app.use(morgan("tiny"));
+app.use(express.json({ limit: "1mb" }));
+app.use(express.urlencoded({ extended: true }));
 
-app.use(cors());
-app.use(bodyParser.json({ limit: "1mb" }));
+const VERSION = "so-quote-backend alpha (lazy-scraper)";
 
-// Health
-app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "3.3-titles-variants", mode: "light-scrape" });
-});
+// Health + root
+function ok(res) {
+  res.json({
+    ok: true,
+    version: VERSION,
+    env: process.env.NODE_ENV || "development",
+    ts: new Date().toISOString(),
+  });
+}
+app.get("/", (_req, res) => ok(res));
+app.get("/health", (_req, res) => ok(res));
 
-// POST /scrape  { urls: string[] }
-app.post("/scrape", async (req, res) => {
+// --- Scrape route (lazy-load to avoid startup crashes) ---
+app.get("/scrape", async (req, res) => {
   try {
-    const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
-    if (!urls.length) return res.status(400).json({ ok: false, error: "No urls provided." });
+    const url = String(req.query.url || "").trim();
+    if (!url) return res.status(400).json({ ok: false, error: "Missing url" });
 
-    const results = await Promise.all(urls.map(async (url) => {
-      try {
-        const resp = await fetch(url, {
-          headers: {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36",
-            "Accept-Language": "en-US,en;q=0.9",
-            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-            "Cache-Control": "no-cache",
-            "Pragma": "no-cache"
-          },
-          redirect: "follow"
-        });
-        const html = await resp.text();
-        const info = extractProductInfo(html, url);
-        return { url, ...info };
-      } catch (e) {
-        return { url, error: String(e) };
-      }
-    }));
+    // 👇 lazy-load so a bad scraper file can't crash the whole app at boot
+    const { scrapePrice } = require("./scraper.js");
 
-    res.json({ ok: true, results });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: String(e) });
+    const price = await scrapePrice(url);
+    if (price == null) {
+      return res.json({ ok: true, price: null, note: "No price detected" });
+    }
+    return res.json({ ok: true, price });
+  } catch (err) {
+    return res
+      .status(500)
+      .json({ ok: false, error: String(err && err.message ? err.message : err) });
   }
 });
 
+// 404
+app.use((req, res) => {
+  res.status(404).json({ ok: false, error: "Not Found", path: req.originalUrl });
+});
+
+// Error handler
+app.use((err, _req, res, _next) => {
+  console.error("ERR:", err);
+  res
+    .status(err.status || 500)
+    .json({ ok: false, error: err.message || "Server error" });
+});
+
+// Start
+const PORT = Number(process.env.PORT || 3000);
 app.listen(PORT, () => {
-  console.log(`so-quote backend running on :${PORT}`);
+  console.log(`Server running on port ${PORT} — ${VERSION}`);
 });
