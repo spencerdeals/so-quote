@@ -1,19 +1,16 @@
 {
   "name": "sdl-instant-quote-alpha",
-  "version": "1.2.0",
-  "description": "SDL Instant Quote — #alpha build with ScrapingBee support",
-  "main": "server.js",
-  "license": "MIT",
+  "version": "1.2.1",
+  "private": true,
   "type": "commonjs",
-  "engines": {
-    "node": ">=18.x"
-  },
   "scripts": {
-    "start": "node server.js"
+    "start": "node index.js"
+  },
+  "engines": {
+    "node": ">=20"
   },
   "dependencies": {
-    "axios": "^1.7.7",
-    "cheerio": "^1.0.0",
-    "express": "^4.19.2"
+    "express": "^4.19.2",
+    "cors": "^2.8.5"
   }
 }
