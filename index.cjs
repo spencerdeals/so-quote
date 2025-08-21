@@ -101,6 +101,8 @@ app.use((err, _req, res, _next) => {
   }
   res.status(500).json({ ok: false, error: "Server error" });
 });
+// Silence browser favicon request (so you don't see 502 errors in console)
+app.get("/favicon.ico", (_req, res) => res.status(204).end());
 
 app.listen(PORT, () => {
   console.log(`Server running on ${PORT} (v=${VERSION})`);
