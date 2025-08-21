@@ -1,7 +1,7 @@
 {
-  "name": "alpha-scraper-light",
-  "version": "1.0.0",
-  "description": "Lightweight scraper for titles, variants, and best-effort price",
+  "name": "so-quote-backend",
+  "version": "1.0.1",
+  "description": "Lightweight product scraper for titles, variants, and best-effort price",
   "type": "module",
   "main": "index.js",
   "scripts": {
