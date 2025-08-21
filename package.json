@@ -1,15 +1,16 @@
 {
-  "name": "so-quote",
+  "name": "instant-quote-backend",
   "version": "1.0.0",
-  "description": "Instant Quote backend",
+  "description": "Instant Quote backend (#alpha) with GET/POST /quote and robust scraping",
   "main": "index.js",
-  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "cheerio": "^1.0.0-rc.12",
-    "express": "^4.18.2",
-    "node-fetch": "^3.3.2"
+    "cheerio": "^1.0.0",
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
   }
-}
