@@ -4,25 +4,20 @@ import cors from "cors";
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// allow ONLY your site (add www if you use it) + local dev if needed
-app.use(cors({
-  origin: [
-    "https://sdl.bm",
-    // "https://www.sdl.bm",     // <- un-comment if your site uses www
-    "http://localhost:3000"     // <- keep if you test locally; remove if not
-  ],
-  methods: ["GET", "POST", "OPTIONS"],
-  allowedHeaders: ["Content-Type", "Authorization"]
-}));
+// --- TEMP: Wide-open CORS for debugging ---
+// This sends Access-Control-Allow-Origin for ANY origin (no credentials).
+app.use(cors({ origin: "*" }));
+app.options("*", cors());
+// ------------------------------------------
 
 app.use(express.json());
 
-// health
+// Health
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha", service: "instant-quote" });
+  res.json({ ok: true, version: "alpha-open", service: "instant-quote" });
 });
 
-// quote
+// Quote (simplified)
 app.post("/quote", (req, res) => {
   const { items } = req.body;
   if (!items || !Array.isArray(items)) {
@@ -30,13 +25,11 @@ app.post("/quote", (req, res) => {
   }
   const quote = items.map(i => ({
     name: i.name,
-    qty: i.qty,
-    unit: i.unitPrice,
-    total: i.qty * i.unitPrice
+    qty: Number(i.qty || 0),
+    unit: Number(i.unitPrice || 0),
+    total: Number(i.qty || 0) * Number(i.unitPrice || 0)
   }));
   res.json({ quote });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 Server running on ${PORT}`));
