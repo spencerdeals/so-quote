@@ -3,93 +3,153 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Instant Import V5 — Bulk Paste → Line Items</title>
+  <title>SDL — Special Order (3-Step)</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <style>
     :root { --sdl:#2e7d32; --sdl-dark:#1b5e20; --sdl-soft:#e8f5e9; }
-    .btn { padding: 0.5rem 1rem; border-radius: 0.375rem; }
-    .btn-primary { background: var(--sdl); color: #fff; }
+    .btn { padding: 0.6rem 1rem; border-radius: 0.6rem; font-weight: 600; }
+    .btn-primary { background: var(--sdl); color:#fff; }
     .btn-primary:hover { background: var(--sdl-dark); }
-    .btn-ghost { border: 1px solid #e5e7eb; background: #fff; }
-    .num { appearance: textfield; }
-    .num::-webkit-inner-spin-button, .num::-webkit-outer-spin-button { appearance: none; }
+    .btn-ghost { border:1px solid #e5e7eb; background:#fff; }
+    .step { display:flex; align-items:center; gap:.5rem; }
+    .step .dot { width:1.4rem; height:1.4rem; border-radius:9999px; display:inline-flex; align-items:center; justify-content:center; font-size:.9rem; }
+    .step.active .dot { background:var(--sdl); color:#fff; }
+    .step.done .dot { background:var(--sdl); color:#fff; }
+    .step .label { font-weight:600; }
+    .card { background:#fff; border:1px solid #e5e7eb; border-radius:1rem; padding:1rem; }
+    .warn { background:#fff7ed; border:1px solid #fed7aa; color:#7c2d12; }
+    .ok { background:var(--sdl-soft); border:1px solid #c8e6c9; color:#1b5e20; }
+    .num { appearance:textfield; }
+    .num::-webkit-inner-spin-button, .num::-webkit-outer-spin-button { appearance:none; }
   </style>
 </head>
-<body class="p-6 font-sans bg-gray-50">
-  <header class="mb-4">
-    <h1 class="text-2xl font-bold">Instant Import V5 — Bulk Paste → Line Items</h1>
-    <p class="text-sm text-gray-700">
-      Paste <strong>links only</strong>, one per line. We’ll split them into items and group by <strong>vendor</strong>.
-      <span class="inline-block mt-1 p-1 px-2 bg-[var(--sdl-soft)] border rounded">
-        Note: Enter prices manually. Use <em>Get Price</em> to open the product page.
-      </span>
-    </p>
-  </header>
+<body class="bg-gray-50 text-gray-900">
+  <div class="max-w-4xl mx-auto p-6">
+    <!-- Stepper -->
+    <div class="flex items-center gap-6 mb-6">
+      <div class="step active" data-step="1"><span class="dot">1</span><span class="label">Paste Links</span></div>
+      <div class="h-px flex-1 bg-gray-300"></div>
+      <div class="step" data-step="2"><span class="dot">2</span><span class="label">Review & Fix Prices</span></div>
+      <div class="h-px flex-1 bg-gray-300"></div>
+      <div class="step" data-step="3"><span class="dot">3</span><span class="label">Checkout & Pay</span></div>
+    </div>
 
-  <section class="mb-4">
-    <label for="links" class="block text-sm font-medium mb-1">Product links (one per line)</label>
-    <textarea id="links" class="w-full border rounded p-3 min-h-[140px]" placeholder="https://www.amazon.com/...
+    <!-- Step 1: Links -->
+    <section id="step1" class="space-y-4">
+      <div class="card">
+        <h1 class="text-2xl font-bold mb-2">Add your product links</h1>
+        <p class="text-sm text-gray-700 mb-2">
+          Paste one link per line. After you click Continue, we’ll split them into items and try to pull the product names automatically.
+        </p>
+        <ul class="list-disc pl-6 text-sm text-gray-700 mb-3">
+          <li>Amazon, Wayfair, Target, Crate & Barrel supported (more coming).</li>
+          <li>You’ll enter prices on the next step.</li>
+        </ul>
+        <label class="block text-sm font-medium mb-1">Product links</label>
+        <textarea id="links" class="w-full border rounded p-3 min-h-[160px]" placeholder="https://www.amazon.com/...
 https://www.wayfair.com/...
 https://www.target.com/...
 ..."></textarea>
-    <div class="mt-2 flex items-center gap-2">
-      <button id="process" class="btn btn-primary">Create line items</button>
-      <button id="clearAll" class="btn btn-ghost">Clear All</button>
-    </div>
-  </section>
+        <div class="mt-4 flex gap-3">
+          <button id="toStep2" class="btn btn-primary">Continue</button>
+          <button id="clearLinks" class="btn btn-ghost">Clear</button>
+        </div>
+      </div>
+      <div class="card ok text-sm">
+        <strong>What happens next:</strong> we’ll show a list of items, fetch names, and you’ll add/confirm prices.
+      </div>
+    </section>
 
-  <section id="groupsSection" class="hidden">
-    <div class="flex items-center justify-between mb-2">
-      <h2 class="text-lg font-semibold">Grouped by Vendor</h2>
-      <div id="totalsBadge" class="text-sm text-gray-700"></div>
-    </div>
-    <div id="groups" class="space-y-6"></div>
-    <div class="mt-4 p-3 bg-[var(--sdl-soft)] border rounded flex items-center justify-between">
-      <strong>Grand Total (items + vendor delivery fees):</strong>
-      <span id="grandTotal">$0.00</span>
-    </div>
-  </section>
+    <!-- Step 2: Review -->
+    <section id="step2" class="hidden space-y-4">
+      <div class="card warn text-sm">
+        <strong>Please double-check your prices.</strong> Our system isn’t perfect yet. If prices don’t match the product page, it could delay your order. Fixing them now speeds things up.
+      </div>
+
+      <div id="itemsWrap" class="space-y-4"></div>
+
+      <div class="card flex items-center justify-between">
+        <div>
+          <div class="text-sm">Items: <strong id="itemCount">0</strong></div>
+          <div class="text-sm">Subtotal: <strong id="subtotal">$0.00</strong></div>
+        </div>
+        <div class="flex gap-3">
+          <button class="btn btn-ghost" id="backTo1">Back</button>
+          <button class="btn btn-primary" id="toStep3">Continue to Checkout</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- Step 3: Checkout -->
+    <section id="step3" class="hidden space-y-4">
+      <div class="card">
+        <h2 class="text-xl font-semibold mb-2">Review & Pay</h2>
+        <p class="text-sm text-gray-700 mb-4">Please review your items and totals below. When you’re ready, proceed to payment.</p>
+        <div class="overflow-x-auto">
+          <table class="min-w-full text-sm">
+            <thead>
+              <tr class="text-left text-gray-600">
+                <th class="py-2 pr-4">Item</th>
+                <th class="py-2 pr-4">Link</th>
+                <th class="py-2 pr-4">Price</th>
+              </tr>
+            </thead>
+            <tbody id="checkoutRows"></tbody>
+          </table>
+        </div>
+        <div class="mt-4 flex items-center justify-between">
+          <div class="text-lg font-semibold">Total: <span id="grand">$0.00</span></div>
+          <div class="flex gap-3">
+            <button class="btn btn-ghost" id="backTo2">Back</button>
+            <button class="btn btn-primary" id="payBtn">Proceed to Payment</button>
+          </div>
+        </div>
+      </div>
+      <div class="card ok text-sm">
+        Paying today secures your order and lets us reserve stock with the vendor right away.
+      </div>
+    </section>
+  </div>
 
   <script>
-    // ====== CONFIG ======
-    // If backend is a different domain, set it here, e.g.:
-    // const API_BASE = "https://your-backend.example.com";
-    const API_BASE = "https://so-quote.fly.dev";   // replace with your backend URL
+    // CHANGE THIS if your backend domain is different:
+    const API_BASE = "https://so-quote-production.up.railway.app";
 
-    // ====== Helpers ======
+    // Helpers
+    const $ = (sel, el=document) => el.querySelector(sel);
+    const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
+    const fmt = n => `$${(Number(n)||0).toFixed(2)}`;
+
+    function setStep(n){
+      $("#step1").classList.toggle("hidden", n!==1);
+      $("#step2").classList.toggle("hidden", n!==2);
+      $("#step3").classList.toggle("hidden", n!==3);
+      $$(".step").forEach(s=>{
+        const idx = Number(s.getAttribute("data-step"));
+        s.classList.remove("active","done");
+        if(idx < n) s.classList.add("done");
+        if(idx === n) s.classList.add("active");
+      });
+    }
+
     function parseLines(text){
-      return (text||'').split(/\r?\n+/).map(line => line.trim()).filter(Boolean);
+      return (text||'').split(/\r?\n+/).map(s=>s.trim()).filter(Boolean);
     }
-    function normalizeHost(url){
-      try{ return new URL(url).hostname.replace(/^www\./,''); }catch{return 'other';}
-    }
-    function vendorLabel(host){
-      const map={ 'amazon.com':'Amazon','wayfair.com':'Wayfair','target.com':'Target' };
-      return map[host]||host;
-    }
-    function currency(n){
-      const v = Number(n)||0; return `$${v.toFixed(2)}`;
-    }
+
     function cleanUrl(raw){
       let u = (raw||'').trim();
       if(!u) return '';
-      u = u.replace(/^\d+\)\s*/, '').replace(/^\(|\)$/g,'');   // strip "1) " and ( ... )
-      if(!/^https?:\/\//i.test(u)){ u = `https://${u}`; }      // add protocol if missing
+      u = u.replace(/^\d+\)\s*/, '').replace(/^\(|\)$/g,'');
+      if(!/^https?:\/\//i.test(u)) u = `https://${u}`;
       try{
         const url = new URL(u);
         const host = url.hostname.replace(/^www\./,'');
-        // unwrap common redirectors
         if(host === 'google.com' && url.pathname === '/url'){
-          const target = url.searchParams.get('q') || url.searchParams.get('url');
-          if(target) return cleanUrl(target);
+          const t = url.searchParams.get('q') || url.searchParams.get('url');
+          if(t) return cleanUrl(t);
         }
         if(host === 'l.facebook.com' || host === 'lm.facebook.com'){
-          const target = url.searchParams.get('u');
-          if(target) return cleanUrl(target);
-        }
-        if(host === 'r.mail.yahoo.com' || host === 'urldefense.proofpoint.com'){
-          const target = url.searchParams.get('q') || url.searchParams.get('u');
-          if(target) return cleanUrl(target);
+          const t = url.searchParams.get('u'); if(t) return cleanUrl(t);
         }
         ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','fbclid','gclid','spm','_hsenc','_hsmi']
           .forEach(p=>url.searchParams.delete(p));
@@ -97,145 +157,101 @@ https://www.target.com/...
       }catch{ return u; }
     }
 
-    // ====== Data building ======
-    function buildItems(lines){
-      let counts={};
-      return lines.map(line => {
-        const parts = line.split(',');
-        const urlPartRaw = (parts[0]||'').trim();
-        const urlPart = cleanUrl(urlPartRaw);
-        const pricePart = (parts[1]||'').trim();
-        const host = normalizeHost(urlPart);
-        counts[host] = (counts[host]||0) + 1;
-        return {
-          url: urlPart,
-          vendorHost: host,
-          title: `${vendorLabel(host)} Item ${counts[host]}`, // fallback text
-          name: 'Fetching name…',  // will be replaced by /meta result
-          unitPrice: pricePart,
-          _fetched: false
-        };
-      });
-    }
-    function groupByVendor(items){
-      const groups={};
-      items.forEach(it=>{
-        const key=it.vendorHost;
-        if(!groups[key]) groups[key]={key, label:vendorLabel(key), items:[], deliveryFee:''};
-        groups[key].items.push(it);
-      });
-      return groups;
-    }
-
-    // ====== Fetch product names ======
-    async function fetchTitleForItem(it, onUpdate){
-      if(it._fetched || !it.url) return;
-      it._fetched = true;
+    async function fetchTitle(url){
       try{
-        const resp = await fetch(`${API_BASE}/meta?url=${encodeURIComponent(it.url)}`);
-        const data = await resp.json();
-        it.name = (data && data.name) ? data.name : '(Title unavailable)';
-      }catch{
-        it.name = '(Title unavailable)';
+        const r = await fetch(`${API_BASE}/meta?url=${encodeURIComponent(url)}`);
+        const j = await r.json();
+        return j && j.name ? j.name : "(Title unavailable)";
+      }catch{ return "(Title unavailable)"; }
+    }
+
+    // State
+    let ITEMS = []; // { url, name, price }
+
+    // Step 1 actions
+    $("#toStep2").addEventListener("click", async ()=>{
+      const links = parseLines($("#links").value).map(cleanUrl);
+      if(!links.length) return;
+      ITEMS = links.map(url => ({ url, name: "Fetching name…", price: "" }));
+      setStep(2);
+      renderReview();
+      // kick off title fetches
+      for (let i=0;i<ITEMS.length;i++){
+        fetchTitle(ITEMS[i].url).then(name=>{
+          ITEMS[i].name = name;
+          const row = document.getElementById(`item-${i}-name`);
+          if(row) row.textContent = name;
+        });
       }
-      onUpdate(); // re-render to show the name
-    }
-    function kickoffTitleFetches(groups, onUpdate){
-      Object.values(groups).forEach(grp=>{
-        grp.items.forEach(it=> fetchTitleForItem(it, onUpdate));
-      });
-    }
+    });
+    $("#clearLinks").addEventListener("click", ()=> $("#links").value="");
 
-    // ====== UI render ======
-    function renderGroups(groups){
-      const wrap=document.getElementById('groups');
-      wrap.innerHTML='';
-      let grand=0; let vendorCount=0; let itemCount=0;
+    // Step 2 (Review)
+    function renderReview(){
+      const wrap = $("#itemsWrap");
+      wrap.innerHTML = "";
+      let subtotal = 0;
 
-      for(const [key,grp] of Object.entries(groups)){
-        vendorCount++; itemCount+=grp.items.length;
-        const vendorSubtotal = grp.items.reduce((s,it)=> s + (Number(it.unitPrice)||0), 0);
-        const delivery = Number(grp.deliveryFee)||0;
-        const vendorTotal = vendorSubtotal + delivery;
-        grand += vendorTotal;
-
-        const card=document.createElement('div');
-        card.className='bg-white border rounded p-3';
-
-        const itemsHtml = grp.items.map((it, idx)=>{
-          const idPrice = `price-${key}-${idx}`;
-          const idBtn = `btn-${key}-${idx}`;
-          const idUrl = `url-${key}-${idx}`;
-          const idName = `name-${key}-${idx}`;
-          return `
-            <div class="mb-3">
-              <div class="text-sm text-gray-500">Vendor: ${grp.label}</div>
-              <div class="font-medium" id="${idName}">${it.name || it.title}</div>
-              <div class="text-xs text-gray-600 break-all" id="${idUrl}">${it.url}</div>
-              <div class="mt-1 flex items-center gap-2">
-                <input type="number" step="0.01" inputmode="decimal" class="num border rounded p-2 w-32" id="${idPrice}" placeholder="Price" value="${it.unitPrice||''}" />
-                <a href="${it.url}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost" id="${idBtn}">Get Price</a>
-              </div>
-            </div>`;
-        }).join('');
-
+      ITEMS.forEach((it, i)=>{
+        const card = document.createElement("div");
+        card.className = "card";
         card.innerHTML = `
-          <div class="font-semibold mb-2">${grp.label}</div>
-          ${itemsHtml}
-          <label class="block text-xs text-gray-700 mb-1">Delivery fee (optional) for ${grp.label}</label>
-          <input type="number" step="0.01" inputmode="decimal" class="num border rounded p-2 w-28" placeholder="0.00" data-vendor="${key}" value="${grp.deliveryFee||''}" />
-          <div class="mt-2 text-sm">Vendor subtotal: <strong>${currency(vendorSubtotal)}</strong></div>
-          <div class="text-sm">Delivery fee: <strong>${currency(delivery)}</strong></div>
-          <div class="text-sm">Vendor total: <strong>${currency(vendorTotal)}</strong></div>
+          <div class="flex items-start justify-between gap-4">
+            <div class="min-w-0">
+              <div id="item-${i}-name" class="font-semibold truncate">${it.name}</div>
+              <a href="${it.url}" target="_blank" rel="noopener noreferrer" class="text-xs text-blue-700 underline break-all">${it.url}</a>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+              <input type="number" step="0.01" inputmode="decimal" class="num border rounded p-2 w-32" id="price-${i}" placeholder="Price" value="${it.price||''}" />
+              <a href="${it.url}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost">Get Price</a>
+            </div>
+          </div>
         `;
         wrap.appendChild(card);
 
-        // Listeners
-        grp.items.forEach((it, idx)=>{
-          const priceEl = card.querySelector(`#price-${key}-${idx}`);
-          if(priceEl){
-            priceEl.addEventListener('input', (e)=>{
-              it.unitPrice = e.target.value;
-              renderGroups(window.__GROUPS__); // keep totals live
-            });
-          }
+        const input = card.querySelector(`#price-${i}`);
+        input.addEventListener("input", e=>{
+          ITEMS[i].price = e.target.value;
+          updateTotals();
         });
+        subtotal += Number(it.price)||0;
+      });
 
-        const delEl = card.querySelector(`input[data-vendor="${key}"]`);
-        if(delEl){
-          delEl.addEventListener('input', (e)=>{
-            groups[key].deliveryFee = e.target.value;
-            renderGroups(window.__GROUPS__);
-          });
-        }
-      }
-
-      document.getElementById('totalsBadge').textContent=`${vendorCount} vendor(s), ${itemCount} item(s)`;
-      document.getElementById('grandTotal').textContent=currency(grand);
+      $("#itemCount").textContent = String(ITEMS.length);
+      $("#subtotal").textContent = fmt(subtotal);
     }
 
-    // ====== Events ======
-    document.getElementById('process').addEventListener('click',()=>{
-      const lines=parseLines(document.getElementById('links').value);
-      if(!lines.length) return;
-      const items=buildItems(lines);
-      window.__GROUPS__=groupByVendor(items);
-      document.getElementById('groupsSection').classList.remove('hidden');
+    function updateTotals(){
+      let subtotal = ITEMS.reduce((s,it)=> s + (Number(it.price)||0), 0);
+      $("#subtotal").textContent = fmt(subtotal);
+      $("#grand").textContent = fmt(subtotal); // simple for now
+    }
 
-      // Initial render shows placeholders, then background fetch fills names
-      renderGroups(window.__GROUPS__);
-      kickoffTitleFetches(window.__GROUPS__, ()=> renderGroups(window.__GROUPS__));
+    $("#backTo1").addEventListener("click", ()=> setStep(1));
 
-      // focus first price input
-      const first = document.querySelector('#groups input[type="number"]');
-      if(first) first.focus();
+    $("#toStep3").addEventListener("click", ()=>{
+      // build checkout table
+      const body = $("#checkoutRows");
+      body.innerHTML = "";
+      let total = 0;
+      ITEMS.forEach(it=>{
+        total += Number(it.price)||0;
+        const tr = document.createElement("tr");
+        tr.innerHTML = `
+          <td class="py-2 pr-4 align-top">${it.name}</td>
+          <td class="py-2 pr-4 align-top"><a href="${it.url}" class="text-blue-700 underline break-all" target="_blank" rel="noopener noreferrer">${it.url}</a></td>
+          <td class="py-2 pr-4 align-top">${fmt(it.price||0)}</td>
+        `;
+        body.appendChild(tr);
+      });
+      $("#grand").textContent = fmt(total);
+      setStep(3);
     });
 
-    document.getElementById('clearAll').addEventListener('click',()=>{
-      document.getElementById('links').value='';
-      document.getElementById('groups').innerHTML='';
-      document.getElementById('groupsSection').classList.add('hidden');
-      window.__GROUPS__ = {};
+    // Step 3 (Checkout)
+    $("#backTo2").addEventListener("click", ()=> setStep(2));
+    $("#payBtn").addEventListener("click", ()=>{
+      alert("Payment step coming next (Shopify Draft Order / Stripe link).");
     });
   </script>
 </body>
