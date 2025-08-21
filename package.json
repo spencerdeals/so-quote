@@ -1,13 +1,15 @@
 {
-  "name": "instant-import-backend",
+  "name": "ocr",
   "version": "1.0.0",
+  "description": "Backend service for scraping metadata",
+  "main": "index.js",
   "type": "module",
-  "scripts": { "start": "node index.js" },
-  "dependencies": {
-    "cheerio": "^1.0.0",
-    "cors": "^2.8.5",
-    "express": "^4.19.2",
-    "undici": "^6.19.8"
+  "scripts": {
+    "start": "node index.js"
   },
-  "engines": { "node": "20.x" }
+  "dependencies": {
+    "cheerio": "^1.0.0-rc.12",
+    "express": "^4.18.2",
+    "node-fetch": "^3.3.2"
+  }
 }
