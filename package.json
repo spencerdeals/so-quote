@@ -1,10 +1,13 @@
 {
-  "name": "instant-quote-alpha-open",
+  "name": "instant-quote-backend",
   "version": "1.0.0",
-  "main": "index.js",
+  "private": true,
   "type": "module",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.cjs"
+  },
+  "engines": {
+    "node": ">=18"
   },
   "dependencies": {
     "cors": "^2.8.5",
