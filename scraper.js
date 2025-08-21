@@ -1,105 +1,35 @@
-// scraper.js — extract title, variants, and best-effort price
-import cheerio from "cheerio";
+// scraper.js — ESM safe helpers
 
-const moneyRegex = /\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|\d+(?:\.\d{2})?)/;
-
-export function extractProductInfo(html, url) {
-  const $ = cheerio.load(html);
-
-  // TITLE
-  let title = null;
-  let titleSource = null;
-  const jsonld = parseJsonLdProduct($);
-
-  if (jsonld?.name) { title = clean(jsonld.name); titleSource = "jsonld.product.name"; }
-  if (!title) { const og = $('meta[property="og:title"]').attr("content"); if (og) { title = clean(og); titleSource = "meta.og:title"; } }
-  if (!title) { const t = $("title").first().text(); if (t) { title = clean(t); titleSource = "html.title"; } }
-  if (!title) { const h1 = $("h1").first().text(); if (h1) { title = clean(h1); titleSource = "html.h1"; } }
-
-  // VARIANTS
-  let variants = extractVariants($, jsonld);
-  let variantSource = variants.length ? "jsonld/offers|selects" : null;
-
-  // PRICE (best-effort)
-  let price = null, currency = null, priceSource = null;
-
-  if (jsonld?.offers) {
-    const { price: jp, priceCurrency: jc } = pickFirstPriceFromOffers(jsonld.offers);
-    if (jp) { price = toNumber(jp); currency = jc || readCurrencyMeta($) || "USD"; priceSource = "jsonld.offers.price"; }
+async function fetchWithTimeout(url, ms = 10000) {
+  const ctrl = new AbortController();
+  const id = setTimeout(() => ctrl.abort(), ms);
+  try {
+    const res = await fetch(url, { signal: ctrl.signal, redirect: "follow" });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return await res.text();
+  } finally {
+    clearTimeout(id);
   }
-
-  if (!price) {
-    const metas = [
-      'meta[itemprop="price"]',
-      'meta[property="product:price:amount"]',
-      'meta[name="price"]',
-      'span[itemprop="price"]',
-      'div[itemprop="price"]'
-    ];
-    for (const sel of metas) {
-      const node = $(sel).first();
-      const val = node.attr("content") || node.text();
-      const m = val && val.match(moneyRegex);
-      if (m) { price = toNumber(m[1]); currency = readCurrencyMeta($) || "USD"; priceSource = `selector:${sel}`; break; }
-    }
-  }
-
-  if (!price) {
-    const probable = $('[class*="price"], [id*="price"]').first().text();
-    const m = probable && probable.match(moneyRegex);
-    if (m) { price = toNumber(m[1]); currency = readCurrencyMeta($) || "USD"; priceSource = "scan.near-price"; }
-  }
-
-  const note = !price ? "Price not found — show manual price input on frontend." : null;
-
-  return { title: title || "Item", titleSource, variants, variantSource, price: price ?? null, currency: currency ?? null, priceSource, note };
 }
 
-// Helpers
-function clean(s){ return String(s||"").replace(/\s+/g," ").trim(); }
-function toNumber(s){ return Number(String(s||"").replace(/[^0-9.]/g,"")) || null; }
-
-function parseJsonLdProduct($){
-  const scripts = $('script[type="application/ld+json"]');
-  for (let i=0;i<scripts.length;i++){
-    try{
-      const txt = scripts.eq(i).contents().text(); if(!txt) continue;
-      const data = JSON.parse(txt.trim());
-      const arr = Array.isArray(data) ? data : [data];
-      for (const obj of arr){
-        if (!obj || typeof obj!=="object") continue;
-        if (isType(obj["@type"],"Product")) return obj;
-        if (Array.isArray(obj["@graph"])){
-          for (const g of obj["@graph"]) if (isType(g?.["@type"],"Product")) return g;
-        }
-      }
-    }catch{}
+/** Try to find a price in the page. Returns number or null. */
+export async function scrapePrice(url) {
+  try {
+    const html = await fetchWithTimeout(url);
+    const m =
+      html.match(/\$[\s]*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})?)/) ||
+      html.match(/"price"\s*:\s*"([0-9]+(?:\.[0-9]{2})?)"/i) ||
+      html.match(/"priceAmount"\s*:\s*"([0-9]+(?:\.[0-9]{2})?)"/i);
+    if (!m) return null;
+    const num = Number(m[1].replace(/,/g, ""));
+    return Number.isFinite(num) ? num : null;
+  } catch {
+    return null;
   }
-  return null;
-}
-function isType(t,val){ return Array.isArray(t) ? t.includes(val) : t===val; }
-
-function pickFirstPriceFromOffers(offers){
-  const list = Array.isArray(offers) ? offers : [offers];
-  for (const o of list){
-    if (!o) continue;
-    if (o.price || (o.priceSpecification && o.priceSpecification.price)){
-      return { price: o.price ?? o.priceSpecification?.price, priceCurrency: o.priceCurrency ?? o.priceSpecification?.priceCurrency };
-    }
-  }
-  return { price: null, priceCurrency: null };
 }
 
-function readCurrencyMeta($){
-  return $('meta[property="product:price:currency"]').attr("content")
-      || $('meta[itemprop="priceCurrency"]').attr("content")
-      || null;
+export async function scrapeLinks(_htmlOrUrl) {
+  return [];
 }
 
-function extractVariants($, jsonld){
-  const out = new Set();
-  if (jsonld?.offers){
-    const list = Array.isArray(jsonld.offers) ? jsonld.offers : [jsonld.offers];
-    for (const o of list){
-      const n = clean(o?.name || o?.sku || "");
-      if (n && n.length < 140) out.add(n)
+export default { scrapePrice, scrapeLinks };
