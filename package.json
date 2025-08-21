@@ -1,5 +1,5 @@
 {
-  "name": "instant-import-v5-backend",
+  "name": "instant-import-backend",
   "version": "1.0.0",
   "type": "module",
   "scripts": { "start": "node index.js" },
