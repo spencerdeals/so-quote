@@ -1,12 +1,12 @@
-// index.js (ESM)
-import express from "express";
-import cors from "cors";
+// index.cjs  (CommonJS — stable)
+const express = require("express");
+const cors = require("cors");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 const VERSION = process.env.APP_VERSION || "alpha-2025-08-21";
 
-// ✅ Allowed web origins (comma-separated env or sensible defaults)
+// Allowed web origins (comma-separated)
 const allowedOrigins = (process.env.ALLOWED_ORIGINS ||
   "http://localhost:3000,http://localhost:5173,https://sdl.bm,https://www.sdl.bm")
   .split(",")
@@ -22,7 +22,7 @@ app.use((req, res, next) => {
   next();
 });
 
-// ✅ CORS: precise, safe, and preflight-friendly
+// CORS
 app.use(
   cors({
     origin: (origin, cb) => {
@@ -40,13 +40,13 @@ app.use(
 // Body parser
 app.use(express.json({ limit: "2mb" }));
 
-// Health check
+// Health
 app.get(["/", "/health"], (_req, res) => {
   res.json({ ok: true, version: VERSION });
 });
 
-// 🔧 Events shim/proxy to stop "failed to fetch shop events"
-app.get(["/events", "/shop/events"], async (req, res) => {
+// Events shim/proxy — avoids “failed to fetch shop events”
+app.get(["/events", "/shop/events"], async (_req, res) => {
   const backend = process.env.BACKEND_URL;
   try {
     if (backend) {
@@ -59,7 +59,7 @@ app.get(["/events", "/shop/events"], async (req, res) => {
         .type(upstream.headers.get("content-type") || "application/json")
         .send(body);
     } else {
-      res.json([]); // benign payload if no upstream
+      res.json([]); // safe fallback
     }
   } catch (err) {
     console.error("GET /events error:", err);
@@ -67,7 +67,7 @@ app.get(["/events", "/shop/events"], async (req, res) => {
   }
 });
 
-// 🔁 Quote proxy — forwards to your real calculator service
+// Quote proxy — forwards to your calculator service
 app.post(["/quote", "/api/quote"], async (req, res) => {
   const backend = process.env.BACKEND_URL;
   if (!backend) {
@@ -93,10 +93,10 @@ app.post(["/quote", "/api/quote"], async (req, res) => {
 // Preflight fast-path
 app.options("*", (_req, res) => res.sendStatus(204));
 
-// Centralized error handler (includes CORS denials)
+// Centralized error handler
 app.use((err, _req, res, _next) => {
-  console.error("Unhandled error:", err && err.message ? err.message : err);
-  if (err && err.message && err.message.startsWith("CORS:")) {
+  console.error("Unhandled error:", err?.message || err);
+  if (err?.message?.startsWith("CORS:")) {
     return res.status(403).json({ ok: false, error: err.message });
   }
   res.status(500).json({ ok: false, error: "Server error" });
