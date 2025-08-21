@@ -1,1 +1,1 @@
-web: node index.cjs
+web: npm start
