@@ -1,163 +1,121 @@
-// scraper.js (CommonJS) — hardened price extractor with Ashley-first fallback
-const cheerio = require("cheerio");
+// SDL Instant Quote — #alpha ScrapingBee Patch
+// - Adds GET /meta?url=... using ScrapingBee to fetch title/price/image reliably
+// - Keeps / (frontend), /health, and POST /quote proxy intact
 
-const FALLBACK_HTTP  = "https://r.jina.ai/http://";
-const FALLBACK_HTTPS = "https://r.jina.ai/https://";
+const express = require('express');
+const path = require('path');
+const cheerio = require('cheerio');
 
-const CURRENCY_RE = /\$\s*\d[\d,\.]*/;
-const ACCESS_RE   = /access to this page has been denied|verify you are human|blocked/i;
+const app = express();
+app.use(express.json({ limit: '2mb' }));
 
-// Common JSON-in-HTML keys we often see
-const JSON_PRICE_KEYS = [
-  /"salePrice"\s*:\s*"?([\d.,]+)"?/i,
-  /"price"\s*:\s*"?([\d.,]+)"?/i,
-  /"currentPrice"\s*:\s*"?([\d.,]+)"?/i,
-  /"offerPrice"\s*:\s*"?([\d.,]+)"?/i
-];
+// ---- Config ----
+const SCRAPINGBEE_KEY = process.env.SCRAPINGBEE_KEY; // REQUIRED
+const TARGET_QUOTE = process.env.QUOTE_URL || 'https://so-quote.fly.dev/quote';
 
-function toNum(s) { const n = parseFloat(String(s).replace(/[^0-9.]/g, "")); return Number.isFinite(n) ? n : 0; }
-function firstCurrency(text) { const m = text.match(CURRENCY_RE); return m ? toNum(m[0]) : 0; }
-function fallbackUrl(url) { const bare = url.replace(/^https?:\/\//i, ""); return (url.startsWith("https://") ? FALLBACK_HTTPS : FALLBACK_HTTP) + bare; }
-function titleFromText(text) { const lines = text.split(/\r?\n/).map(s=>s.trim()).filter(Boolean); return lines.find(s => s.length > 10 && s.length < 140) || "Item"; }
+// ---- Frontend + health ----
+app.get('/', (_req, res) => {
+  res.sendFile(path.join(__dirname, 'frontend.html'));
+});
 
-async function fetchHtml(url) {
-  const res = await fetch(url, {
-    redirect: "follow",
-    headers: {
-      "user-agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-      "accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-      "accept-language": "en-US,en;q=0.9",
-      "upgrade-insecure-requests": "1",
-      "cache-control": "no-cache",
-      "pragma": "no-cache",
-      "referer": new URL(url).origin + "/"
-    }
-  });
-  const html = await res.text();
-  return { status: res.status, html };
-}
+app.get('/health', (_req, res) => {
+  res.json({ ok: true, version: '#alpha + scrapingbee', hasKey: !!SCRAPINGBEE_KEY, ts: new Date().toISOString() });
+});
 
-function scanJsonForPrice(html) {
-  for (const rx of JSON_PRICE_KEYS) {
-    const m = html.match(rx);
-    if (m && m[1]) {
-      const v = toNum(m[1]);
-      if (v) return v;
-    }
-  }
-  return 0;
-}
-
-function extractFromDom(html) {
-  const $ = cheerio.load(html);
-
-  const title =
-    $("h1").first().text().trim() ||
-    $('meta[property="og:title"]').attr("content") ||
-    $("title").first().text().trim() || "Item";
-
-  // JSON-LD offers first (often reliable)
-  let ldPrice = 0;
-  $('script[type="application/ld+json"]').each((_, s) => {
-    try {
-      const data = JSON.parse($(s).html() || "{}");
-      const arr = Array.isArray(data) ? data : [data];
-      for (const d of arr) {
-        if (d?.offers) {
-          const cand = Array.isArray(d.offers) ? d.offers[0]?.price : d.offers.price;
-          if (cand) { ldPrice = toNum(cand); if (ldPrice) return false; }
-        }
-      }
-    } catch {}
-  });
-  if (ldPrice) return { title, price: ldPrice };
-
-  // “Sale/Now/Today $…”
-  const saleText = $('*:contains("Sale"), *:contains("Now"), *:contains("Today")')
-    .filter((_, el) => CURRENCY_RE.test($(el).text()))
-    .first().text();
-  if (saleText) {
-    const n = firstCurrency(saleText);
-    if (n) return { title, price: n };
-  }
-
-  // Meta price
-  const meta =
-    Number($('meta[itemprop="price"]').attr("content")) ||
-    Number($('meta[property="product:price:amount"]').attr("content")) || 0;
-  if (meta) return { title, price: meta };
-
-  // Common containers
-  const containers = [
-    '[data-testid*="price"]','[data-test*="price"]',
-    '[class*="price"]','[class*="Price"]',
-    '.price','.sale','.salesprice','.product-price','.final-price'
-  ].join(",");
-  const block = $(containers).text();
-  const n = firstCurrency(block);
-  if (n) return { title, price: n };
-
-  // Anywhere in body
-  const any = firstCurrency($("body").text());
-  if (any) return { title, price: any };
-
-  return { title, price: 0 };
-}
-
-async function scrapeProduct(url) {
+// ---- Quote proxy (unchanged) ----
+app.post('/quote', async (req, res) => {
   try {
-    const host = new URL(url).hostname;
-
-    // --- Ashley: go straight to text-render fallback first ---
-    if (host.includes("ashleyfurniture.com")) {
-      const fbRes = await fetch(fallbackUrl(url), { headers: { "accept-language": "en-US,en;q=0.9" } });
-      const text = await fbRes.text();
-
-      // Prefer explicit phrases
-      const sale = text.match(/(?:Sale|Now|Today)\s*\$[\s\d,\.]+/i);
-      if (sale) {
-        const n = firstCurrency(sale[0]);
-        if (n) return { title: titleFromText(text), firstCost: n, url };
-      }
-
-      // Embedded JSON price keys
-      const jp = scanJsonForPrice(text);
-      if (jp) return { title: titleFromText(text), firstCost: jp, url };
-
-      // First currency anywhere
-      const any = firstCurrency(text);
-      return { title: titleFromText(text), firstCost: any || 0, url };
-    }
-
-    // --- Others: DOM attempt first, then fallback ---
-    const { status, html } = await fetchHtml(url);
-    const dom = extractFromDom(html);
-    let price = dom.price || scanJsonForPrice(html);
-    const blocked = status >= 400 || ACCESS_RE.test(dom.title || html) || !price;
-
-    if (!blocked && price) {
-      return { title: dom.title, firstCost: price, url };
-    }
-
-    // Forced fallback
-    const fbRes = await fetch(fallbackUrl(url), { headers: { "accept-language": "en-US,en;q=0.9" } });
-    const text = await fbRes.text();
-
-    const sale = text.match(/(?:Sale|Now|Today)\s*\$[\s\d,\.]+/i);
-    if (sale) {
-      const n = firstCurrency(sale[0]);
-      if (n) return { title: titleFromText(text), firstCost: n, url };
-    }
-    const jp = scanJsonForPrice(text);
-    if (jp) return { title: titleFromText(text), firstCost: jp, url };
-
-    const any = firstCurrency(text);
-    return { title: titleFromText(text), firstCost: any || 0, url };
-
-  } catch (e) {
-    console.error("scrapeProduct error:", e?.message || e);
-    return { title: "Item", firstCost: 0, url };
+    const r = await fetch(TARGET_QUOTE, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(req.body || {}),
+    });
+    const text = await r.text();
+    res.status(r.status).type(r.headers.get('content-type') || 'application/json').send(text);
+  } catch (err) {
+    res.status(500).json({ error: 'Proxy failed', detail: String(err && err.message || err) });
   }
-}
+});
 
-module.exports = { scrapeProduct };
+// ---- NEW: /meta via ScrapingBee ----
+/**
+ * GET /meta?url=https://example.com/product/123
+ * Returns: { url, title, price, image, source }
+ */
+app.get('/meta', async (req, res) => {
+  try {
+    const target = (req.query.url || '').toString();
+    if (!target) return res.status(400).json({ error: 'Missing url' });
+    if (!SCRAPINGBEE_KEY) return res.status(500).json({ error: 'Missing SCRAPINGBEE_KEY env' });
+
+    const beeUrl = new URL('https://app.scrapingbee.com/api/v1/');
+    beeUrl.searchParams.set('api_key', SCRAPINGBEE_KEY);
+    beeUrl.searchParams.set('url', target);
+    beeUrl.searchParams.set('render_js', 'true');            // let pages compute content
+    beeUrl.searchParams.set('country_code', 'us');           // US region
+    beeUrl.searchParams.set('premium_proxy', 'true');        // more reliable e-comm
+    beeUrl.searchParams.set('return_page_source', 'true');   // return HTML
+
+    const r = await fetch(beeUrl.toString(), {
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36'
+      }
+    });
+    const html = await r.text();
+    const $ = cheerio.load(html);
+
+    // Try JSON-LD first (Product schema)
+    let title = null, price = null, image = null, source = 'unknown';
+    $('script[type="application/ld+json"]').each((_, el) => {
+      try {
+        const data = JSON.parse($(el).text());
+        const arr = Array.isArray(data) ? data : [data];
+        for (const item of arr) {
+          const t = (item && (item.name || item.title)) || null;
+          const offers = item && item.offers;
+          const p = offers && (offers.price || (offers.priceSpecification && offers.priceSpecification.price));
+          const img = item && (item.image || (item.images && item.images[0]));
+          if (!title && t) { title = String(t); source = 'ld+json'; }
+          if (!price && p) { price = String(p); source = 'ld+json'; }
+          if (!image && img) { image = Array.isArray(img) ? img[0] : img; }
+          if (title && (price || image)) break;
+        }
+      } catch {}
+    });
+
+    // Fallback: Open Graph
+    if (!title) {
+      const ogt = $('meta[property="og:title"]').attr('content');
+      if (ogt) { title = ogt; source = 'og'; }
+    }
+    if (!image) {
+      const ogi = $('meta[property="og:image"]').attr('content');
+      if (ogi) image = ogi;
+    }
+
+    // Fallback: <title>
+    if (!title) {
+      const t = $('title').first().text().trim();
+      if (t) { title = t; source = 'title-tag'; }
+    }
+
+    // Heuristic: look for price-like strings if not in JSON-LD
+    if (!price) {
+      const metaPrice = $('meta[itemprop="price"], meta[property="product:price:amount"]').attr('content');
+      if (metaPrice) { price = metaPrice; source = 'meta-price'; }
+    }
+    if (!price) {
+      const priceText = $('*[class*="price"], *[id*="price"]').first().text();
+      const m = priceText && priceText.match(/\$?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
+      if (m) { price = m[1].replace(/,/g, ''); source = 'price-heuristic'; }
+    }
+
+    res.json({ url: target, title: title || null, price: price || null, image: image || null, source, status: r.status });
+  } catch (err) {
+    res.status(500).json({ error: 'meta-failed', detail: String(err && err.message || err) });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log('SDL #alpha (ScrapingBee) on http://localhost:' + PORT));
