@@ -102,20 +102,4 @@ function extractVariants($, jsonld){
     const list = Array.isArray(jsonld.offers) ? jsonld.offers : [jsonld.offers];
     for (const o of list){
       const n = clean(o?.name || o?.sku || "");
-      if (n && n.length < 140) out.add(n);
-      const color = o?.color ? `Color: ${clean(o.color)}` : null;
-      const size  = o?.size  ? `Size: ${clean(o.size)}`  : null;
-      const combo = [color,size].filter(Boolean).join(" — ");
-      if (combo) out.add(combo);
-    }
-  }
-  const selects = $('select[name*="color" i], select[id*="color" i], select[name*="size" i], select[id*="size" i], select[name*="style" i], select[id*="style" i], select[name*="option" i], select[id*="option" i]');
-  selects.each((_, sel)=>{
-    const $sel = $(sel);
-    $sel.find("option").each((_, opt)=>{
-      const txt = clean($(opt).text());
-      if (txt && !/select/i.test(txt) && txt.length < 140) out.add(txt);
-    });
-  });
-  return Array.from(out);
-}
+      if (n && n.length < 140) out.add(n)
