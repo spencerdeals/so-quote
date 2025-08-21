@@ -1,4 +1,4 @@
-// index.cjs  (CommonJS — stable)
+// index.cjs (pure CommonJS — no import)
 const express = require("express");
 const cors = require("cors");
 
@@ -13,7 +13,7 @@ const allowedOrigins = (process.env.ALLOWED_ORIGINS ||
   .map(s => s.trim())
   .filter(Boolean);
 
-// (Optional) force HTTPS behind Railway proxy when ENFORCE_HTTPS=1
+// Optional: force HTTPS behind Railway proxy
 app.use((req, res, next) => {
   const proto = req.headers["x-forwarded-proto"];
   if (proto && proto !== "https" && process.env.ENFORCE_HTTPS === "1") {
@@ -26,7 +26,7 @@ app.use((req, res, next) => {
 app.use(
   cors({
     origin: (origin, cb) => {
-      if (!origin) return cb(null, true); // server-to-server / curl
+      if (!origin) return cb(null, true); // server-to-server
       if (allowedOrigins.includes(origin)) return cb(null, true);
       return cb(new Error(`CORS: origin not allowed -> ${origin}`));
     },
@@ -37,7 +37,7 @@ app.use(
   })
 );
 
-// Body parser
+// JSON body
 app.use(express.json({ limit: "2mb" }));
 
 // Health
@@ -45,7 +45,7 @@ app.get(["/", "/health"], (_req, res) => {
   res.json({ ok: true, version: VERSION });
 });
 
-// Events shim/proxy — avoids “failed to fetch shop events”
+// Events proxy/shim
 app.get(["/events", "/shop/events"], async (_req, res) => {
   const backend = process.env.BACKEND_URL;
   try {
@@ -67,7 +67,7 @@ app.get(["/events", "/shop/events"], async (_req, res) => {
   }
 });
 
-// Quote proxy — forwards to your calculator service
+// Quote proxy
 app.post(["/quote", "/api/quote"], async (req, res) => {
   const backend = process.env.BACKEND_URL;
   if (!backend) {
@@ -90,10 +90,10 @@ app.post(["/quote", "/api/quote"], async (req, res) => {
   }
 });
 
-// Preflight fast-path
+// Preflight
 app.options("*", (_req, res) => res.sendStatus(204));
 
-// Centralized error handler
+// Error handler
 app.use((err, _req, res, _next) => {
   console.error("Unhandled error:", err?.message || err);
   if (err?.message?.startsWith("CORS:")) {
