@@ -18,7 +18,9 @@ app.get("/meta", async (req, res) => {
   }
 
   try {
-    const response = await fetch(url);
+    const response = await fetch(url, {
+      headers: { "User-Agent": "Mozilla/5.0" } // helps some sites
+    });
     if (!response.ok) {
       return res.status(500).json({ error: "Failed to fetch URL" });
     }
@@ -28,7 +30,7 @@ app.get("/meta", async (req, res) => {
     // Extract title
     let title =
       $("meta[property='og:title']").attr("content") ||
-      $("title").text() ||
+      $("title").text().trim() ||
       "Title unavailable";
 
     // Extract price (basic attempt)
