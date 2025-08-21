@@ -1,132 +1,125 @@
-/* Instant Quote — Consolidated Backend (index.js)
- * Purpose: Merge OCR/scraper logic into a single backend service for Railway.
- * Version: 4.0-consolidated
- * Health tag: version=4.0-consolidated, calc=price-sum
- *
- * Endpoints:
- *   GET  /health                          -> simple JSON health check
- *   POST /scrape                          -> { urls: string[] } -> [{ url, title, source: 'html|scraperbee', ok, error? }]
- *   POST /ocr/upload                      -> multipart/form-data (file) -> { ok: true, filename }
- *
- * Notes:
- *  - Title extraction tries: <title>, <meta property="og:title">, <meta name="title">.
- *  - Optional ScraperBee proxy: set SCRAPERBEE_API_KEY to enable.
- *  - Start command on Railway: `node index.js`
- */
+// Instant Quote Backend — CORS Fix (#alpha)
+// Full paste-and-replace file for index.js
+// Version: 2025-08-21 alpha-cors-allow
 
-const express = require("express");
-const cors = require("cors");
-const morgan = require("morgan");
-const axios = require("axios");
-const multer = require("multer");
-
-const PORT = process.env.PORT || 3000;
-const SCRAPERBEE_API_KEY = process.env.SCRAPERBEE_API_KEY || ""; // optional
+import express from "express";
+import cors from "cors";
 
 const app = express();
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
-app.use(morgan("tiny"));
+const PORT = process.env.PORT || 3000;
 
-// ----- Utils
-const pickTitle = (html) => {
-  if (!html) return null;
-  // Try <title>
-  const titleMatch = html.match(/<title[^>]*>([^<]+)<\/title>/i);
-  if (titleMatch) return titleMatch[1].trim();
+// ---------------------------
+// CORS: allow only approved origins
+// ---------------------------
+const DEFAULT_ALLOWED_ORIGINS = [
+  "https://sdl-quote-frontend-production.up.railway.app",
+  "https://sdl.bm",
+  "http://localhost:5173",
+  "http://localhost:3000"
+];
 
-  // Try og:title
-  const ogMatch = html.match(
-    /<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)["'][^>]*>/i
-  );
-  if (ogMatch) return ogMatch[1].trim();
+const ALLOWED_ORIGINS = (process.env.FRONTEND_ORIGINS || "")
+  .split(",")
+  .map(s => s.trim())
+  .filter(Boolean);
 
-  // Try name="title"
-  const nameMatch = html.match(
-    /<meta[^>]+name=["']title["'][^>]*content=["']([^"']+)["'][^>]*>/i
-  );
-  if (nameMatch) return nameMatch[1].trim();
+const allowList = ALLOWED_ORIGINS.length ? ALLOWED_ORIGINS : DEFAULT_ALLOWED_ORIGINS;
 
-  return null;
+const corsOptionsDelegate = (req, callback) => {
+  const origin = req.header("Origin");
+  // Allow same-origin/no-origin (like curl or server-to-server)
+  if (!origin) return callback(null, { origin: true, credentials: false });
+  const isAllowed = allowList.includes(origin);
+  callback(null, {
+    origin: isAllowed,
+    credentials: false,
+    methods: ["GET", "HEAD", "OPTIONS"],
+    allowedHeaders: ["Content-Type", "Accept"],
+    maxAge: 600
+  });
 };
 
-async function fetchViaScraperBee(url) {
-  if (!SCRAPERBEE_API_KEY) return null;
-  try {
-    // ScraperBee example endpoint (adjust if your provider differs)
-    const api = "https://api.scraperbee.com/scrape";
-    const resp = await axios.post(
-      api,
-      { url },
-      { headers: { Authorization: `Bearer ${SCRAPERBEE_API_KEY}` }, timeout: 30000 }
-    );
-    if (resp?.data?.html) {
-      const title = pickTitle(resp.data.html);
-      return { ok: true, title, source: "scraperbee" };
-    }
-    return { ok: false, error: "No HTML in ScraperBee response", source: "scraperbee" };
-  } catch (err) {
-    return { ok: false, error: `ScraperBee error: ${err.message}`, source: "scraperbee" };
-  }
-}
+app.use(cors(corsOptionsDelegate));
+app.options("*", cors(corsOptionsDelegate));
 
-async function fetchDirect(url) {
-  try {
-    const resp = await axios.get(url, {
-      timeout: 20000,
-      // Many e‑commerce sites require a UA to return full HTML
-      headers: { "User-Agent": "Mozilla/5.0 (compatible; SDLQuoteBot/1.0)" },
-    });
-    const title = pickTitle(resp.data);
-    return { ok: true, title, source: "html" };
-  } catch (err) {
-    return { ok: false, error: `Direct fetch error: ${err.message}`, source: "html" };
+app.use((req, _res, next) => {
+  if (process.env.LOG_REQUESTS === "1") {
+    console.log(`[${new Date().toISOString()}] ${req.method} ${req.originalUrl} (Origin: ${req.headers.origin || "-"})`);
   }
-}
+  next();
+});
 
-// ----- Routes
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "4.0-consolidated", calc: "price-sum" });
+  res.json({ ok: true, version: "alpha-cors-allow", time: new Date().toISOString() });
 });
 
-app.post("/scrape", async (req, res) => {
+// ---------------------------------------
+// /meta — fetch a page server-side & return its <title>
+// ---------------------------------------
+function extractTitle(html) {
+  const m = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+  if (m && m[1]) {
+    return m[1].replace(/\s+/g, " ").trim();
+  }
+  const m2 = html.match(/<meta[^>]+property=["']og:title["'][^>]*content=["']([^"']+)["'][^>]*>/i);
+  if (m2 && m2[1]) return m2[1].trim();
+  const m3 = html.match(/<meta[^>]+name=["']twitter:title["'][^>]*content=["']([^"']+)["'][^>]*>/i);
+  if (m3 && m3[1]) return m3[1].trim();
+  return null;
+}
+
+app.get("/meta", async (req, res) => {
   try {
-    const urls = Array.isArray(req.body?.urls) ? req.body.urls : [];
-    if (!urls.length) {
-      return res.status(400).json({ ok: false, error: "Provide { urls: string[] }" });
+    const target = String(req.query.url || "").trim();
+    if (!target) {
+      return res.status(400).json({ ok: false, error: "Missing ?url parameter" });
+    }
+    let u;
+    try {
+      u = new URL(target);
+    } catch {
+      return res.status(400).json({ ok: false, error: "Invalid URL" });
+    }
+    if (!/^https?:$/.test(u.protocol)) {
+      return res.status(400).json({ ok: false, error: "Only http(s) URLs are allowed" });
     }
 
-    const results = await Promise.all(
-      urls.map(async (url) => {
-        // 1) Try direct fetch first (fast)
-        const direct = await fetchDirect(url);
-        if (direct.ok && direct.title) return { url, ...direct };
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 15000);
 
-        // 2) Fallback to ScraperBee if configured
-        const bee = await fetchViaScraperBee(url);
-        if (bee && bee.ok && bee.title) return { url, ...bee };
+    const resp = await fetch(u.href, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        "User-Agent":
+          "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9"
+      }
+    }).catch(err => {
+      throw new Error(`Upstream fetch error: ${err.message}`);
+    });
+    clearTimeout(timeout);
 
-        // 3) If both failed, return best error
-        const error = bee?.error || direct.error || "Unknown error";
-        return { url, ok: false, title: null, source: bee?.source || direct.source, error };
-      })
-    );
+    if (!resp.ok) {
+      return res.status(resp.status).json({ ok: false, error: `Upstream responded ${resp.status}` });
+    }
 
-    res.json({ ok: true, results });
-  } catch (e) {
-    res.status(500).json({ ok: false, error: e.message });
+    const html = await resp.text();
+    const title = extractTitle(html) || null;
+
+    res.setHeader("Vary", "Origin");
+    return res.json({ ok: true, url: u.href, title });
+  } catch (err) {
+    const msg = err && err.message ? err.message : String(err);
+    return res.status(502).json({ ok: false, error: msg });
   }
 });
 
-// Simple OCR upload placeholder — consolidates former update.js into one service.
-// You can wire your OCR processor here later.
-const upload = multer({ dest: "uploads/" });
-app.post("/ocr/upload", upload.single("file"), (req, res) => {
-  if (!req.file) return res.status(400).json({ ok: false, error: "No file uploaded" });
-  res.json({ ok: true, filename: req.file.filename, original: req.file.originalname });
+app.use((req, res) => {
+  res.status(404).json({ ok: false, error: "Not found" });
 });
 
-// ----- Start
 app.listen(PORT, () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
+  console.log(`Server running on :${PORT}`);
 });
