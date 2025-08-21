@@ -1,7 +1,7 @@
 {
-  "name": "ocr",
+  "name": "so-quote",
   "version": "1.0.0",
-  "description": "Backend service for scraping metadata",
+  "description": "Instant Quote backend",
   "main": "index.js",
   "type": "module",
   "scripts": {
