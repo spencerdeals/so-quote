@@ -1,16 +1,20 @@
 {
   "name": "sdl-instant-quote-alpha",
-  "version": "1.2.1",
+  "version": "1.2.2",
   "private": true,
+  "license": "UNLICENSED",
+  "description": "SDL Instant Quote — #alpha backend",
+  "main": "index.js",
   "type": "commonjs",
   "scripts": {
-    "start": "node index.js"
+    "start": "node index.js",
+    "dev": "node index.js"
   },
   "engines": {
     "node": ">=20"
   },
   "dependencies": {
-    "express": "^4.19.2",
-    "cors": "^2.8.5"
+    "cors": "^2.8.5",
+    "express": "^4.19.2"
   }
 }
