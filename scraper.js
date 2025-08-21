@@ -1,121 +1,214 @@
-// SDL Instant Quote — #alpha ScrapingBee Patch
-// - Adds GET /meta?url=... using ScrapingBee to fetch title/price/image reliably
-// - Keeps / (frontend), /health, and POST /quote proxy intact
+// scrapers.js — generic title/variant/price extraction with graceful fallbacks
+import cheerio from "cheerio";
 
-const express = require('express');
-const path = require('path');
-const cheerio = require('cheerio');
+const moneyRegex = /\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|\d+(?:\.\d{2})?)/;
 
-const app = express();
-app.use(express.json({ limit: '2mb' }));
+export function extractProductInfo(html, url) {
+  const $ = cheerio.load(html);
 
-// ---- Config ----
-const SCRAPINGBEE_KEY = process.env.SCRAPINGBEE_KEY; // REQUIRED
-const TARGET_QUOTE = process.env.QUOTE_URL || 'https://so-quote.fly.dev/quote';
+  // ---------- TITLE ----------
+  let title = null;
+  let titleSource = null;
 
-// ---- Frontend + health ----
-app.get('/', (_req, res) => {
-  res.sendFile(path.join(__dirname, 'frontend.html'));
-});
-
-app.get('/health', (_req, res) => {
-  res.json({ ok: true, version: '#alpha + scrapingbee', hasKey: !!SCRAPINGBEE_KEY, ts: new Date().toISOString() });
-});
-
-// ---- Quote proxy (unchanged) ----
-app.post('/quote', async (req, res) => {
-  try {
-    const r = await fetch(TARGET_QUOTE, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(req.body || {}),
-    });
-    const text = await r.text();
-    res.status(r.status).type(r.headers.get('content-type') || 'application/json').send(text);
-  } catch (err) {
-    res.status(500).json({ error: 'Proxy failed', detail: String(err && err.message || err) });
+  // 1) JSON-LD Product.name
+  const jsonld = parseJsonLdProducts($);
+  if (jsonld?.name) {
+    title = cleanText(jsonld.name);
+    titleSource = "jsonld.product.name";
   }
-});
 
-// ---- NEW: /meta via ScrapingBee ----
-/**
- * GET /meta?url=https://example.com/product/123
- * Returns: { url, title, price, image, source }
- */
-app.get('/meta', async (req, res) => {
-  try {
-    const target = (req.query.url || '').toString();
-    if (!target) return res.status(400).json({ error: 'Missing url' });
-    if (!SCRAPINGBEE_KEY) return res.status(500).json({ error: 'Missing SCRAPINGBEE_KEY env' });
+  // 2) og:title
+  if (!title) {
+    const og = $('meta[property="og:title"]').attr("content");
+    if (og) {
+      title = cleanText(og);
+      titleSource = "meta.og:title";
+    }
+  }
 
-    const beeUrl = new URL('https://app.scrapingbee.com/api/v1/');
-    beeUrl.searchParams.set('api_key', SCRAPINGBEE_KEY);
-    beeUrl.searchParams.set('url', target);
-    beeUrl.searchParams.set('render_js', 'true');            // let pages compute content
-    beeUrl.searchParams.set('country_code', 'us');           // US region
-    beeUrl.searchParams.set('premium_proxy', 'true');        // more reliable e-comm
-    beeUrl.searchParams.set('return_page_source', 'true');   // return HTML
+  // 3) <title>
+  if (!title) {
+    const t = $("title").first().text();
+    if (t) {
+      title = cleanText(t);
+      titleSource = "html.title";
+    }
+  }
 
-    const r = await fetch(beeUrl.toString(), {
-      headers: {
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123 Safari/537.36'
+  // 4) Fallback: first H1
+  if (!title) {
+    const h1 = $("h1").first().text();
+    if (h1) {
+      title = cleanText(h1);
+      titleSource = "html.h1";
+    }
+  }
+
+  // ---------- VARIANTS ----------
+  // Try JSON-LD offers array, or select menus that look like size/color/style.
+  let variants = extractVariants($, jsonld);
+  let variantSource = variants.length ? "jsonld/offers|selects" : null;
+
+  // ---------- PRICE (best-effort) ----------
+  // We try JSON-LD offers.price, meta price tags, then visible text scan (last resort).
+  let price = null;
+  let currency = null;
+  let priceSource = null;
+
+  if (jsonld?.offers) {
+    const { price: jp, priceCurrency: jc } = pickFirstPriceFromOffers(jsonld.offers);
+    if (jp) {
+      price = toNumber(jp);
+      currency = jc || inferCurrencySymbol($) || "USD";
+      priceSource = "jsonld.offers.price";
+    }
+  }
+
+  if (!price) {
+    // Common metas
+    const metas = [
+      'meta[itemprop="price"]',
+      'meta[property="product:price:amount"]',
+      'meta[name="price"]',
+      'span[itemprop="price"]',
+      'div[itemprop="price"]',
+    ];
+
+    for (const sel of metas) {
+      const node = $(sel).first();
+      const val = node.attr("content") || node.text();
+      const m = val && val.match(moneyRegex);
+      if (m) {
+        price = toNumber(m[1]);
+        currency = inferCurrencySymbol($) || "USD";
+        priceSource = `selector:${sel}`;
+        break;
       }
-    });
-    const html = await r.text();
-    const $ = cheerio.load(html);
-
-    // Try JSON-LD first (Product schema)
-    let title = null, price = null, image = null, source = 'unknown';
-    $('script[type="application/ld+json"]').each((_, el) => {
-      try {
-        const data = JSON.parse($(el).text());
-        const arr = Array.isArray(data) ? data : [data];
-        for (const item of arr) {
-          const t = (item && (item.name || item.title)) || null;
-          const offers = item && item.offers;
-          const p = offers && (offers.price || (offers.priceSpecification && offers.priceSpecification.price));
-          const img = item && (item.image || (item.images && item.images[0]));
-          if (!title && t) { title = String(t); source = 'ld+json'; }
-          if (!price && p) { price = String(p); source = 'ld+json'; }
-          if (!image && img) { image = Array.isArray(img) ? img[0] : img; }
-          if (title && (price || image)) break;
-        }
-      } catch {}
-    });
-
-    // Fallback: Open Graph
-    if (!title) {
-      const ogt = $('meta[property="og:title"]').attr('content');
-      if (ogt) { title = ogt; source = 'og'; }
     }
-    if (!image) {
-      const ogi = $('meta[property="og:image"]').attr('content');
-      if (ogi) image = ogi;
-    }
-
-    // Fallback: <title>
-    if (!title) {
-      const t = $('title').first().text().trim();
-      if (t) { title = t; source = 'title-tag'; }
-    }
-
-    // Heuristic: look for price-like strings if not in JSON-LD
-    if (!price) {
-      const metaPrice = $('meta[itemprop="price"], meta[property="product:price:amount"]').attr('content');
-      if (metaPrice) { price = metaPrice; source = 'meta-price'; }
-    }
-    if (!price) {
-      const priceText = $('*[class*="price"], *[id*="price"]').first().text();
-      const m = priceText && priceText.match(/\$?\s?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
-      if (m) { price = m[1].replace(/,/g, ''); source = 'price-heuristic'; }
-    }
-
-    res.json({ url: target, title: title || null, price: price || null, image: image || null, source, status: r.status });
-  } catch (err) {
-    res.status(500).json({ error: 'meta-failed', detail: String(err && err.message || err) });
   }
-});
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log('SDL #alpha (ScrapingBee) on http://localhost:' + PORT));
+  if (!price) {
+    // Last resort: scan for a $x.xx near "price" labels
+    const probable = $('[class*="price"], [id*="price"]').first().text();
+    const m = probable && probable.match(moneyRegex);
+    if (m) {
+      price = toNumber(m[1]);
+      currency = inferCurrencySymbol($) || "USD";
+      priceSource = "scan.near-price";
+    }
+  }
+
+  // ---------- NOTES / FLAGS ----------
+  let note = null;
+  if (!price) {
+    note = "Price not found — show manual price input on frontend.";
+  }
+
+  return {
+    title: title || "Item",
+    titleSource,
+    variants,
+    variantSource,
+    price: price ?? null,
+    currency: currency ?? null,
+    priceSource,
+    note,
+  };
+}
+
+// -------- helpers --------
+
+function cleanText(s) {
+  return String(s || "").replace(/\s+/g, " ").trim();
+}
+
+function toNumber(s) {
+  const n = String(s || "").replace(/[^0-9.]/g, "");
+  return n ? Number(n) : null;
+}
+
+function parseJsonLdProducts($) {
+  // Return the first Product object we find, or null
+  const scripts = $('script[type="application/ld+json"]');
+  for (let i = 0; i < scripts.length; i++) {
+    try {
+      const txt = scripts.eq(i).contents().text();
+      if (!txt) continue;
+      const data = JSON.parse(txt.trim());
+
+      // Handle array or single
+      const arr = Array.isArray(data) ? data : [data];
+      for (const obj of arr) {
+        if (!obj || typeof obj !== "object") continue;
+        // @type could be array or string
+        const t = obj["@type"];
+        if (t === "Product" orIsArrayWith(obj["@type"], "Product")) {
+          return obj;
+        }
+        // Some sites nest product inside graph
+        if (obj["@graph"] && Array.isArray(obj["@graph"])) {
+          for (const g of obj["@graph"]) {
+            if (g && (g["@type"] === "Product" orIsArrayWith(g["@type"], "Product"))) {
+              return g;
+            }
+          }
+        }
+      }
+    } catch {}
+  }
+  return null;
+}
+
+function orIsArrayWith(t, val) {
+  return Array.isArray(t) ? t.includes(val) : t === val;
+}
+
+function pickFirstPriceFromOffers(offers) {
+  // offers can be object or array
+  const list = Array.isArray(offers) ? offers : [offers];
+  for (const o of list) {
+    if (!o) continue;
+    if (o.price || (o.priceSpecification && o.priceSpecification.price)) {
+      return {
+        price: o.price ?? o.priceSpecification?.price,
+        priceCurrency: o.priceCurrency ?? o.priceSpecification?.priceCurrency,
+      };
+    }
+  }
+  return { price: null, priceCurrency: null };
+}
+
+function inferCurrencySymbol($) {
+  const sym = $('meta[property="product:price:currency"]').attr("content")
+           || $('meta[itemprop="priceCurrency"]').attr("content");
+  return sym || null;
+}
+
+function extractVariants($, jsonld) {
+  // 1) Try JSON-LD variations via offers with variant attributes in name/sku
+  const variants = new Set();
+
+  if (jsonld?.offers) {
+    const list = Array.isArray(jsonld.offers) ? jsonld.offers : [jsonld.offers];
+    for (const o of list) {
+      const n = cleanText(o?.name || o?.sku || "");
+      if (n && n.length < 140) variants.add(n);
+      const color = o?.color ? `Color: ${cleanText(o.color)}` : null;
+      const size = o?.size ? `Size: ${cleanText(o.size)}` : null;
+      const combo = [color, size].filter(Boolean).join(" — ");
+      if (combo) variants.add(combo);
+    }
+  }
+
+  // 2) Look for select menus labeled color/size/style/option
+  const selects = $('select[name*="color" i], select[id*="color" i], select[name*="size" i], select[id*="size" i], select[name*="style" i], select[id*="style" i], select[name*="option" i], select[id*="option" i]');
+  selects.each((_, sel) => {
+    const $sel = $(sel);
+    $sel.find("option").each((_, opt) => {
+      const txt = cleanText($(opt).text());
+      if (txt && !/select/i.test(txt) && txt.length < 140) variants.add(txt);
+    });
+  });
+
+  return Array.from(variants);
+}
