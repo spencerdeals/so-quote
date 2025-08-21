@@ -1,0 +1,17 @@
+{
+  "name": "so-quote-backend",
+  "version": "1.0.2",
+  "description": "Lightweight product scraper for titles, variants, and best-effort price",
+  "type": "module",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "cheerio": "^1.0.0-rc.12",
+    "cors": "^2.8.5",
+    "express": "^4.19.2",
+    "node-fetch": "^3.3.2"
+  }
+}
