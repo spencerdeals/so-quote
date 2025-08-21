@@ -25,13 +25,13 @@ app.get("/meta", async (req, res) => {
     const html = await response.text();
     const $ = cheerio.load(html);
 
-    // Try to extract title
+    // Extract title
     let title =
       $("meta[property='og:title']").attr("content") ||
       $("title").text() ||
       "Title unavailable";
 
-    // Try to extract price (basic attempt)
+    // Extract price (basic attempt)
     let price =
       $("meta[property='product:price:amount']").attr("content") ||
       $('[itemprop="price"]').attr("content") ||
