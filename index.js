@@ -1,64 +1,93 @@
-// index.js — ESM (because package.json has "type": "module")
+// scraper/bee.js
+import axios from "axios";
 
-import "dotenv/config";
-import express from "express";
-import cors from "cors";
-import morgan from "morgan";
+const BEE_BASE = "https://app.scrapingbee.com/api/v1";
+const BEE_KEY = process.env.SCRAPINGBEE_API_KEY;
 
-const app = express();
-app.disable("x-powered-by");
-app.use(cors({ origin: "*" }));
-app.use(morgan("tiny"));
-app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: true }));
+function extractNamePrice(html) {
+  const nameMatch =
+    html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i)?.[1] ||
+    html.match(/<h1[^>]*>(.*?)<\/h1>/i)?.[1] ||
+    "";
 
-const VERSION = "so-quote-backend alpha (esm + lazy-scraper)";
+  const priceMatch =
+    html.match(/"price"\s*:\s*"(\d[\d.,]*)"/i)?.[1] ||
+    html.match(/data-price="(\d[\d.,]*)"/i)?.[1] ||
+    html.match(/class="a-offscreen">\$?(\d[\d.,]*)</i)?.[1] ||
+    html.match(/itemprop="price"[^>]*content="(\d[\d.,]*)"/i)?.[1] ||
+    html.match(/\$ ?(\d{1,3}(?:[,]\d{3})*(?:\.\d{2})?)/)?.[1] ||
+    "";
 
-// Health + root
-const ok = (res) =>
-  res.json({
-    ok: true,
-    version: VERSION,
-    env: process.env.NODE_ENV || "development",
-    ts: new Date().toISOString(),
-  });
+  const name = nameMatch.toString().replace(/\s+/g, " ").trim();
+  const price = priceMatch ? Number(priceMatch.replace(/[,$]/g, "")) : null;
+  return { name, price };
+}
 
-app.get("/", (_req, res) => ok(res));
-app.get("/health", (_req, res) => ok(res));
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-// --- Scrape route (lazy-load the scraper so it can't crash startup) ---
-app.get("/scrape", async (req, res) => {
-  try {
-    const url = String(req.query.url || "").trim();
-    if (!url) return res.status(400).json({ ok: false, error: "Missing url" });
+async function fetchWithBee(targetUrl, {
+  waitMs = 1500,
+  waitFor = ".a-price,.product-price,.price,.ProductPrice",
+  retries = 3,
+} = {}) {
+  if (!BEE_KEY) throw new Error("Missing SCRAPINGBEE_API_KEY");
 
-    // ESM dynamic import
-    const { scrapePrice } = await import("./scraper.js");
+  const params = [
+    `api_key=${BEE_KEY}`,
+    `url=${encodeURIComponent(targetUrl)}`,
+    "premium_proxy=true",
+    "country_code=us",
+    "render_js=true",
+    `wait=${waitMs}`,
+    `wait_for=${encodeURIComponent(waitFor)}`,
+    "block_resources=false",
+    `custom_headers[User-Agent]=${encodeURIComponent(
+      "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36"
+    )}`,
+    "timeout=30000"
+  ].join("&");
 
-    const price = await scrapePrice(url);
-    if (price == null) {
-      return res.json({ ok: true, price: null, note: "No price detected" });
+  let attempt = 0;
+  while (true) {
+    try {
+      const res = await axios.get(`${BEE_BASE}?${params}`, {
+        responseType: "text",
+        validateStatus: () => true
+      });
+      const beeStatus = Number(res.headers["scrapingbee-status-code"]) || res.status;
+
+      if (beeStatus >= 200 && beeStatus < 300) return res.data;
+
+      if ((beeStatus >= 500 && beeStatus < 600) || beeStatus === 429) {
+        if (attempt >= retries) throw new Error(`Bee error ${beeStatus} after ${retries + 1} tries`);
+        attempt++;
+        await sleep(400 * Math.pow(2, attempt));
+        continue;
+      }
+      throw new Error(`Bee non-retryable error: ${beeStatus}`);
+    } catch (err) {
+      if (attempt >= retries) throw err;
+      attempt++;
+      await sleep(400 * Math.pow(2, attempt));
     }
-    return res.json({ ok: true, price });
-  } catch (err) {
-    return res
-      .status(500)
-      .json({ ok: false, error: String(err?.message || err) });
   }
-});
+}
 
-// 404
-app.use((req, res) => {
-  res.status(404).json({ ok: false, error: "Not Found", path: req.originalUrl });
-});
+export async function scrapeNameAndPrice(targetUrl) {
+  const html = await fetchWithBee(targetUrl);
+  const { name, price } = extractNamePrice(html);
 
-// Error handler
-app.use((err, _req, res, _next) => {
-  console.error("ERR:", err);
-  res.status(err.status || 500).json({ ok: false, error: err.message || "Server error" });
-});
+  let fallbackName = name;
+  try {
+    const u = new URL(targetUrl);
+    if (!fallbackName) {
+      fallbackName =
+        u.pathname.split("/").filter(Boolean).slice(0, -1).join(" ").replace(/[-_]/g, " ") ||
+        `${u.hostname.replace(/^www\./, "")} item (name not found)`;
+    }
+  } catch {
+    if (!fallbackName) fallbackName = "Item (name not found)";
+  }
 
-const PORT = Number(process.env.PORT || 3000);
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT} — ${VERSION}`);
-});
+  return { name: fallbackName.trim(), price, htmlSnippet: html.slice(0, 4000) };
+}
