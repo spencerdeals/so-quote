@@ -1,32 +1,27 @@
-// index.js — so-quote backend (Express, robust paste-and-replace)
+// index.js — so-quote backend (Express) with CORS + scrape route
 
 import express from "express";
-// If you already added this file earlier, keep it. Otherwise comment the import and the route that uses it.
 import { scrapeNameAndPrice } from "./scraper/bee.js";
 
 const app = express();
-
-// ------- Core middleware -------
-app.set("trust proxy", 1); // safe for Railway
+app.set("trust proxy", 1);
 app.use(express.json({ limit: "1mb" }));
-app.use(express.urlencoded({ extended: false }));
 
-// Optional CORS (no extra deps). Allow everything by default; tighten later if needed.
+// --- CORS (allow your front-end to call this API) ---
 app.use((req, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Origin", "*"); // if you want to lock it down later, put your domain here
   res.setHeader("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization");
   if (req.method === "OPTIONS") return res.sendStatus(200);
   next();
 });
 
-// ------- Health -------
+// --- Health ---
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, service: "so-quote-backend", version: "scrape-1" });
+  res.json({ ok: true, service: "so-quote-backend", version: "scrape-2-cors" });
 });
 
-// ------- ScrapingBee endpoint -------
-// Body: { url: "https://..." }
+// --- ScrapingBee endpoint ---
 app.post("/quote/scrape", async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -41,28 +36,11 @@ app.post("/quote/scrape", async (req, res) => {
   }
 });
 
-// ------- (Optional) Your existing quote route placeholder -------
-app.post("/quote", (_req, res) => {
-  res.json({ ok: true, message: "Quote endpoint placeholder" });
-});
+// --- 404 fallback ---
+app.use((_req, res) => res.status(404).json({ ok: false, error: "Not found" }));
 
-// ------- 404 & Error handlers -------
-app.use((_req, res) => {
-  res.status(404).json({ ok: false, error: "Not found" });
-});
-
-app.use((err, _req, res, _next) => {
-  console.error("Unhandled error:", err);
-  res.status(500).json({ ok: false, error: "Server error" });
-});
-
-// ------- Start server -------
+// --- Start ---
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Server running on http://0.0.0.0:${PORT}`);
 });
-
-// ---- Test (run this in your Mac Terminal) ----
-// curl -X POST https://so-quote-production.up.railway.app/quote/scrape \
-//   -H "Content-Type: application/json" \
-//   -d '{"url":"https://www.amazon.com/dp/B0CXXXXXXX"}'
