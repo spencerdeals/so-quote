@@ -1,9 +1,10 @@
-// scraper/bee.js
+// scraper/bee.js — simplified for reliability on Amazon/Wayfair
 import axios from "axios";
 
 const BEE_BASE = "https://app.scrapingbee.com/api/v1";
 const BEE_KEY = process.env.SCRAPINGBEE_API_KEY;
 
+// very basic extraction (name via og:title or H1; price via common patterns)
 function extractNamePrice(html) {
   const nameMatch =
     html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i)?.[1] ||
@@ -11,9 +12,9 @@ function extractNamePrice(html) {
     "";
 
   const priceMatch =
-    html.match(/"price"\s*:\s*"(\d[\d.,]*)"/i)?.[1] ||
+    html.match(/"price"\s*:\s*"(\d[\d.,]*)"/i)?.[1] ||                // JSON-LD
     html.match(/data-price="(\d[\d.,]*)"/i)?.[1] ||
-    html.match(/class="a-offscreen">\$?(\d[\d.,]*)</i)?.[1] ||
+    html.match(/class="a-offscreen">\$?(\d[\d.,]*)</i)?.[1] ||        // Amazon
     html.match(/itemprop="price"[^>]*content="(\d[\d.,]*)"/i)?.[1] ||
     html.match(/\$ ?(\d{1,3}(?:[,]\d{3})*(?:\.\d{2})?)/)?.[1] ||
     "";
@@ -26,8 +27,7 @@ function extractNamePrice(html) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function fetchWithBee(targetUrl, {
-  waitMs = 1500,
-  waitFor = ".a-price,.product-price,.price,.ProductPrice",
+  waitMs = 2500,           // bump wait so JS can render
   retries = 3,
 } = {}) {
   if (!BEE_KEY) throw new Error("Missing SCRAPINGBEE_API_KEY");
@@ -39,7 +39,6 @@ async function fetchWithBee(targetUrl, {
     "country_code=us",
     "render_js=true",
     `wait=${waitMs}`,
-    `wait_for=${encodeURIComponent(waitFor)}`,
     "block_resources=false",
     `custom_headers[User-Agent]=${encodeURIComponent(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36"
@@ -58,17 +57,19 @@ async function fetchWithBee(targetUrl, {
 
       if (beeStatus >= 200 && beeStatus < 300) return res.data;
 
+      // retry on transient issues
       if ((beeStatus >= 500 && beeStatus < 600) || beeStatus === 429) {
         if (attempt >= retries) throw new Error(`Bee error ${beeStatus} after ${retries + 1} tries`);
         attempt++;
-        await sleep(400 * Math.pow(2, attempt));
+        await sleep(400 * (2 ** attempt));
         continue;
       }
+      // non-retryable (400/401/403/422, etc.)
       throw new Error(`Bee non-retryable error: ${beeStatus}`);
     } catch (err) {
       if (attempt >= retries) throw err;
       attempt++;
-      await sleep(400 * Math.pow(2, attempt));
+      await sleep(400 * (2 ** attempt));
     }
   }
 }
