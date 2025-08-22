@@ -3,256 +3,87 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SDL — Special Order (3-Step)</title>
-  <script src="https://cdn.tailwindcss.com"></script>
+  <title>Instant Quote – SDL</title>
   <style>
-    :root { --sdl:#2e7d32; --sdl-dark:#1b5e20; --sdl-soft:#e8f5e9; }
-    .btn { padding: 0.6rem 1rem; border-radius: 0.6rem; font-weight: 600; }
-    .btn-primary { background: var(--sdl); color:#fff; }
-    .btn-primary:hover { background: var(--sdl-dark); }
-    .btn-ghost { border:1px solid #e5e7eb; background:#fff; }
-    .step { display:flex; align-items:center; gap:.5rem; }
-    .step .dot { width:1.4rem; height:1.4rem; border-radius:9999px; display:inline-flex; align-items:center; justify-content:center; font-size:.9rem; }
-    .step.active .dot { background:var(--sdl); color:#fff; }
-    .step.done .dot { background:var(--sdl); color:#fff; }
-    .step .label { font-weight:600; }
-    .card { background:#fff; border:1px solid #e5e7eb; border-radius:1rem; padding:1rem; }
-    .warn { background:#fff7ed; border:1px solid #fed7aa; color:#7c2d12; }
-    .ok { background:var(--sdl-soft); border:1px solid #c8e6c9; color:#1b5e20; }
-    .num { appearance:textfield; }
-    .num::-webkit-inner-spin-button, .num::-webkit-outer-spin-button { appearance:none; }
+    :root {
+      --accent: #2c7a3f;
+      --accent-dark: #245d32;
+      --bg: #f9f9f9;
+    }
+    body {
+      font-family: sans-serif;
+      background: var(--bg);
+      margin: 0;
+      padding: 0;
+    }
+    header {
+      background: var(--accent);
+      color: white;
+      padding: 1rem;
+      text-align: center;
+      font-size: 1.25rem;
+      font-weight: bold;
+    }
+    .container {
+      max-width: 800px;
+      margin: 2rem auto;
+      background: white;
+      border-radius: 1rem;
+      padding: 2rem;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+    }
+    .step-bar {
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 1.5rem;
+    }
+    .step {
+      flex: 1;
+      text-align: center;
+      font-weight: 600;
+      color: gray;
+    }
+    .step.active {
+      color: var(--accent);
+    }
+    button {
+      background: var(--accent);
+      border: none;
+      color: white;
+      padding: 0.75rem 1.5rem;
+      border-radius: 0.5rem;
+      font-size: 1rem;
+      cursor: pointer;
+      margin-top: 1rem;
+    }
+    button:hover {
+      background: var(--accent-dark);
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 1rem;
+    }
+    th, td {
+      padding: 0.75rem;
+      border-bottom: 1px solid #ddd;
+      text-align: left;
+    }
+    th {
+      background: #f0f0f0;
+    }
   </style>
 </head>
-<body class="bg-gray-50 text-gray-900">
-  <div class="max-w-4xl mx-auto p-6">
-    <!-- Stepper -->
-    <div class="flex items-center gap-6 mb-6">
-      <div class="step active" data-step="1"><span class="dot">1</span><span class="label">Paste Links</span></div>
-      <div class="h-px flex-1 bg-gray-300"></div>
-      <div class="step" data-step="2"><span class="dot">2</span><span class="label">Review & Fix Prices</span></div>
-      <div class="h-px flex-1 bg-gray-300"></div>
-      <div class="step" data-step="3"><span class="dot">3</span><span class="label">Checkout & Pay</span></div>
+<body>
+  <header>SDL – Instant Quote</header>
+  <div class="container">
+    <div class="step-bar">
+      <div class="step active" id="step1-label">1. Upload Links</div>
+      <div class="step" id="step2-label">2. Review Quote</div>
+      <div class="step" id="step3-label">3. Approve & Pay</div>
     </div>
 
-    <!-- Step 1: Links -->
-    <section id="step1" class="space-y-4">
-      <div class="card">
-        <h1 class="text-2xl font-bold mb-2">Add your product links</h1>
-        <p class="text-sm text-gray-700 mb-2">
-          Paste one link per line. After you click Continue, we’ll split them into items and try to pull the product names automatically.
-        </p>
-        <ul class="list-disc pl-6 text-sm text-gray-700 mb-3">
-          <li>Amazon, Wayfair, Target, Crate & Barrel supported (more coming).</li>
-          <li>You’ll enter prices on the next step.</li>
-        </ul>
-        <label class="block text-sm font-medium mb-1">Product links</label>
-        <textarea id="links" class="w-full border rounded p-3 min-h-[160px]" placeholder="https://www.amazon.com/...
-https://www.wayfair.com/...
-https://www.target.com/...
-..."></textarea>
-        <div class="mt-4 flex gap-3">
-          <button id="toStep2" class="btn btn-primary">Continue</button>
-          <button id="clearLinks" class="btn btn-ghost">Clear</button>
-        </div>
-      </div>
-      <div class="card ok text-sm">
-        <strong>What happens next:</strong> we’ll show a list of items, fetch names, and you’ll add/confirm prices.
-      </div>
-    </section>
-
-    <!-- Step 2: Review -->
-    <section id="step2" class="hidden space-y-4">
-      <div class="card warn text-sm">
-        <strong>Please double-check your prices.</strong> Our system isn’t perfect yet. If prices don’t match the product page, it could delay your order. Fixing them now speeds things up.
-      </div>
-
-      <div id="itemsWrap" class="space-y-4"></div>
-
-      <div class="card flex items-center justify-between">
-        <div>
-          <div class="text-sm">Items: <strong id="itemCount">0</strong></div>
-          <div class="text-sm">Subtotal: <strong id="subtotal">$0.00</strong></div>
-        </div>
-        <div class="flex gap-3">
-          <button class="btn btn-ghost" id="backTo1">Back</button>
-          <button class="btn btn-primary" id="toStep3">Continue to Checkout</button>
-        </div>
-      </div>
-    </section>
-
-    <!-- Step 3: Checkout -->
-    <section id="step3" class="hidden space-y-4">
-      <div class="card">
-        <h2 class="text-xl font-semibold mb-2">Review & Pay</h2>
-        <p class="text-sm text-gray-700 mb-4">Please review your items and totals below. When you’re ready, proceed to payment.</p>
-        <div class="overflow-x-auto">
-          <table class="min-w-full text-sm">
-            <thead>
-              <tr class="text-left text-gray-600">
-                <th class="py-2 pr-4">Item</th>
-                <th class="py-2 pr-4">Link</th>
-                <th class="py-2 pr-4">Price</th>
-              </tr>
-            </thead>
-            <tbody id="checkoutRows"></tbody>
-          </table>
-        </div>
-        <div class="mt-4 flex items-center justify-between">
-          <div class="text-lg font-semibold">Total: <span id="grand">$0.00</span></div>
-          <div class="flex gap-3">
-            <button class="btn btn-ghost" id="backTo2">Back</button>
-            <button class="btn btn-primary" id="payBtn">Proceed to Payment</button>
-          </div>
-        </div>
-      </div>
-      <div class="card ok text-sm">
-        Paying today secures your order and lets us reserve stock with the vendor right away.
-      </div>
-    </section>
-  </div>
-
-  <script>
-    // CHANGE THIS if your backend domain is different:
-    const API_BASE = "https://so-quote-production.up.railway.app";
-
-    // Helpers
-    const $ = (sel, el=document) => el.querySelector(sel);
-    const $$ = (sel, el=document) => Array.from(el.querySelectorAll(sel));
-    const fmt = n => `$${(Number(n)||0).toFixed(2)}`;
-
-    function setStep(n){
-      $("#step1").classList.toggle("hidden", n!==1);
-      $("#step2").classList.toggle("hidden", n!==2);
-      $("#step3").classList.toggle("hidden", n!==3);
-      $$(".step").forEach(s=>{
-        const idx = Number(s.getAttribute("data-step"));
-        s.classList.remove("active","done");
-        if(idx < n) s.classList.add("done");
-        if(idx === n) s.classList.add("active");
-      });
-    }
-
-    function parseLines(text){
-      return (text||'').split(/\r?\n+/).map(s=>s.trim()).filter(Boolean);
-    }
-
-    function cleanUrl(raw){
-      let u = (raw||'').trim();
-      if(!u) return '';
-      u = u.replace(/^\d+\)\s*/, '').replace(/^\(|\)$/g,'');
-      if(!/^https?:\/\//i.test(u)) u = `https://${u}`;
-      try{
-        const url = new URL(u);
-        const host = url.hostname.replace(/^www\./,'');
-        if(host === 'google.com' && url.pathname === '/url'){
-          const t = url.searchParams.get('q') || url.searchParams.get('url');
-          if(t) return cleanUrl(t);
-        }
-        if(host === 'l.facebook.com' || host === 'lm.facebook.com'){
-          const t = url.searchParams.get('u'); if(t) return cleanUrl(t);
-        }
-        ['utm_source','utm_medium','utm_campaign','utm_term','utm_content','fbclid','gclid','spm','_hsenc','_hsmi']
-          .forEach(p=>url.searchParams.delete(p));
-        return url.toString();
-      }catch{ return u; }
-    }
-
-    async function fetchTitle(url){
-      try{
-        const r = await fetch(`${API_BASE}/meta?url=${encodeURIComponent(url)}`);
-        const j = await r.json();
-        return j && j.name ? j.name : "(Title unavailable)";
-      }catch{ return "(Title unavailable)"; }
-    }
-
-    // State
-    let ITEMS = []; // { url, name, price }
-
-    // Step 1 actions
-    $("#toStep2").addEventListener("click", async ()=>{
-      const links = parseLines($("#links").value).map(cleanUrl);
-      if(!links.length) return;
-      ITEMS = links.map(url => ({ url, name: "Fetching name…", price: "" }));
-      setStep(2);
-      renderReview();
-      // kick off title fetches
-      for (let i=0;i<ITEMS.length;i++){
-        fetchTitle(ITEMS[i].url).then(name=>{
-          ITEMS[i].name = name;
-          const row = document.getElementById(`item-${i}-name`);
-          if(row) row.textContent = name;
-        });
-      }
-    });
-    $("#clearLinks").addEventListener("click", ()=> $("#links").value="");
-
-    // Step 2 (Review)
-    function renderReview(){
-      const wrap = $("#itemsWrap");
-      wrap.innerHTML = "";
-      let subtotal = 0;
-
-      ITEMS.forEach((it, i)=>{
-        const card = document.createElement("div");
-        card.className = "card";
-        card.innerHTML = `
-          <div class="flex items-start justify-between gap-4">
-            <div class="min-w-0">
-              <div id="item-${i}-name" class="font-semibold truncate">${it.name}</div>
-              <a href="${it.url}" target="_blank" rel="noopener noreferrer" class="text-xs text-blue-700 underline break-all">${it.url}</a>
-            </div>
-            <div class="flex items-center gap-2 shrink-0">
-              <input type="number" step="0.01" inputmode="decimal" class="num border rounded p-2 w-32" id="price-${i}" placeholder="Price" value="${it.price||''}" />
-              <a href="${it.url}" target="_blank" rel="noopener noreferrer" class="btn btn-ghost">Get Price</a>
-            </div>
-          </div>
-        `;
-        wrap.appendChild(card);
-
-        const input = card.querySelector(`#price-${i}`);
-        input.addEventListener("input", e=>{
-          ITEMS[i].price = e.target.value;
-          updateTotals();
-        });
-        subtotal += Number(it.price)||0;
-      });
-
-      $("#itemCount").textContent = String(ITEMS.length);
-      $("#subtotal").textContent = fmt(subtotal);
-    }
-
-    function updateTotals(){
-      let subtotal = ITEMS.reduce((s,it)=> s + (Number(it.price)||0), 0);
-      $("#subtotal").textContent = fmt(subtotal);
-      $("#grand").textContent = fmt(subtotal); // simple for now
-    }
-
-    $("#backTo1").addEventListener("click", ()=> setStep(1));
-
-    $("#toStep3").addEventListener("click", ()=>{
-      // build checkout table
-      const body = $("#checkoutRows");
-      body.innerHTML = "";
-      let total = 0;
-      ITEMS.forEach(it=>{
-        total += Number(it.price)||0;
-        const tr = document.createElement("tr");
-        tr.innerHTML = `
-          <td class="py-2 pr-4 align-top">${it.name}</td>
-          <td class="py-2 pr-4 align-top"><a href="${it.url}" class="text-blue-700 underline break-all" target="_blank" rel="noopener noreferrer">${it.url}</a></td>
-          <td class="py-2 pr-4 align-top">${fmt(it.price||0)}</td>
-        `;
-        body.appendChild(tr);
-      });
-      $("#grand").textContent = fmt(total);
-      setStep(3);
-    });
-
-    // Step 3 (Checkout)
-    $("#backTo2").addEventListener("click", ()=> setStep(2));
-    $("#payBtn").addEventListener("click", ()=>{
-      alert("Payment step coming next (Shopify Draft Order / Stripe link).");
-    });
-  </script>
-</body>
-</html>
+    <!-- Step 1 -->
+    <div id="step1">
+      <h2>Step 1 — Paste Your Product Links</h2>
+      <p>Please paste the product link(s) below. Make sure you have selected the correct size, color, or variant on the retailer’s site be
