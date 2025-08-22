@@ -1,24 +1,19 @@
-// scraper/bee.js — simplified for reliability on Amazon/Wayfair
+// scraper/bee.js — diagnostic version to surface ScrapingBee errors
 import axios from "axios";
 
 const BEE_BASE = "https://app.scrapingbee.com/api/v1";
 const BEE_KEY = process.env.SCRAPINGBEE_API_KEY;
 
-// very basic extraction (name via og:title or H1; price via common patterns)
 function extractNamePrice(html) {
   const nameMatch =
     html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i)?.[1] ||
-    html.match(/<h1[^>]*>(.*?)<\/h1>/i)?.[1] ||
-    "";
-
+    html.match(/<h1[^>]*>(.*?)<\/h1>/i)?.[1] || "";
   const priceMatch =
-    html.match(/"price"\s*:\s*"(\d[\d.,]*)"/i)?.[1] ||                // JSON-LD
+    html.match(/"price"\s*:\s*"(\d[\d.,]*)"/i)?.[1] ||
     html.match(/data-price="(\d[\d.,]*)"/i)?.[1] ||
-    html.match(/class="a-offscreen">\$?(\d[\d.,]*)</i)?.[1] ||        // Amazon
+    html.match(/class="a-offscreen">\$?(\d[\d.,]*)</i)?.[1] ||
     html.match(/itemprop="price"[^>]*content="(\d[\d.,]*)"/i)?.[1] ||
-    html.match(/\$ ?(\d{1,3}(?:[,]\d{3})*(?:\.\d{2})?)/)?.[1] ||
-    "";
-
+    html.match(/\$ ?(\d{1,3}(?:[,]\d{3})*(?:\.\d{2})?)/)?.[1] || "";
   const name = nameMatch.toString().replace(/\s+/g, " ").trim();
   const price = priceMatch ? Number(priceMatch.replace(/[,$]/g, "")) : null;
   return { name, price };
@@ -27,8 +22,8 @@ function extractNamePrice(html) {
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
 async function fetchWithBee(targetUrl, {
-  waitMs = 2500,           // bump wait so JS can render
-  retries = 3,
+  waitMs = 2500,
+  retries = 2,
 } = {}) {
   if (!BEE_KEY) throw new Error("Missing SCRAPINGBEE_API_KEY");
 
@@ -54,22 +49,25 @@ async function fetchWithBee(targetUrl, {
         validateStatus: () => true
       });
       const beeStatus = Number(res.headers["scrapingbee-status-code"]) || res.status;
-
       if (beeStatus >= 200 && beeStatus < 300) return res.data;
 
-      // retry on transient issues
+      // Build a useful error message so we can see what's wrong
+      const beeErr =
+        res.headers["scrapingbee-error"] ||
+        res.headers["x-scrapingbee-error"] ||
+        (typeof res.data === "string" ? res.data.slice(0, 500) : JSON.stringify(res.data || {}));
+      const msg = `Bee error ${beeStatus}${beeErr ? `: ${beeErr}` : ""}`;
+
+      // Retry only on transient issues
       if ((beeStatus >= 500 && beeStatus < 600) || beeStatus === 429) {
-        if (attempt >= retries) throw new Error(`Bee error ${beeStatus} after ${retries + 1} tries`);
-        attempt++;
-        await sleep(400 * (2 ** attempt));
-        continue;
+        if (attempt >= retries) throw new Error(msg);
+        attempt++; await sleep(400 * (2 ** attempt)); continue;
       }
-      // non-retryable (400/401/403/422, etc.)
-      throw new Error(`Bee non-retryable error: ${beeStatus}`);
+      // Surface non-retryable detail
+      throw new Error(msg);
     } catch (err) {
       if (attempt >= retries) throw err;
-      attempt++;
-      await sleep(400 * (2 ** attempt));
+      attempt++; await sleep(400 * (2 ** attempt));
     }
   }
 }
@@ -89,6 +87,5 @@ export async function scrapeNameAndPrice(targetUrl) {
   } catch {
     if (!fallbackName) fallbackName = "Item (name not found)";
   }
-
-  return { name: fallbackName.trim(), price, htmlSnippet: html.slice(0, 4000) };
+  return { name: fallbackName.trim(), price, htmlSnippet: html.slice(0, 1000) };
 }
