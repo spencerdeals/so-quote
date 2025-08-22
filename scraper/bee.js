@@ -35,7 +35,7 @@ async function fetchWithBee(targetUrl, {
     "render_js=true",
     `wait=${waitMs}`,
     "block_resources=false",
-    `custom_headers[User-Agent]=${encodeURIComponent(
+    `=${encodeURIComponent(
       "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0 Safari/537.36"
     )}`,
     "timeout=30000"
