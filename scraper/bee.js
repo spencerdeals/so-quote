@@ -1,34 +1,67 @@
-// scraper/bee.js — corrected version with HTML stripping for clean names
+// scraper/bee.js — returns clean name, price, and variant
 import axios from "axios";
 
 const BEE_BASE = "https://app.scrapingbee.com/api/v1";
 const BEE_KEY = process.env.SCRAPINGBEE_API_KEY;
 
-function stripHtml(raw) {
-  return raw.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
-}
+const stripHtml = (raw) => raw.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
 
-function extractNamePrice(html) {
-  const nameMatch =
+function extractName(html) {
+  const name =
     html.match(/<meta\s+property="og:title"\s+content="([^"]+)"/i)?.[1] ||
     html.match(/<h1[^>]*>(.*?)<\/h1>/i)?.[1] || "";
-  const priceMatch =
-    html.match(/"price"\s*:\s*"(\d[\d.,]*)"/i)?.[1] ||
-    html.match(/data-price="(\d[\d.,]*)"/i)?.[1] ||
-    html.match(/class="a-offscreen">\$?(\d[\d.,]*)</i)?.[1] ||
+  return stripHtml(name);
+}
+
+function extractPrice(html) {
+  const price =
+    html.match(/"price"\s*:\s*"(\d[\d.,]*)"/i)?.[1] ||              // JSON-LD
     html.match(/itemprop="price"[^>]*content="(\d[\d.,]*)"/i)?.[1] ||
-    html.match(/\$ ?(\d{1,3}(?:[,]\d{3})*(?:\.\d{2})?)/)?.[1] || "";
-  const name = stripHtml(nameMatch.toString());
-  const price = priceMatch ? Number(priceMatch.replace(/[,$]/g, "")) : null;
-  return { name, price };
+    html.match(/class="a-offscreen">\$?(\d[\d.,]*)</i)?.[1] ||      // Amazon
+    html.match(/data-price="(\d[\d.,]*)"/i)?.[1] ||
+    html.match(/\$ ?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/)?.[1] || "";
+  return price ? Number(price.replace(/[,$]/g, "")) : null;
+}
+
+function extractVariant(html) {
+  // Amazon common selected variant nodes:
+  //   #variation_color_name .selection
+  //   #variation_size_name .selection
+  //   #variation_style_name .selection
+  //   .twister .a-button-selected .a-button-text
+  const picks = [];
+
+  // #variation_* .selection → "Dark Gray" / "Queen" / "Right Sitting Chaise"
+  const selMatches = html.match(/id="variation_[^"]+"\s*[^>]*>[\s\S]*?class="selection"[^>]*>([\s\S]*?)<\/[^>]+>/gi);
+  if (selMatches) {
+    for (const m of selMatches) {
+      const val = stripHtml(m.replace(/^[\s\S]*class="selection"[^>]*>/i, "").replace(/<\/[^>]+>[\s\S]*$/i, ""));
+      if (val) picks.push(val);
+    }
+  }
+
+  // Twister selected pill text
+  const twister = html.match(/class="a-button-selected"[\s\S]*?class="a-button-text"[^>]*>([\s\S]*?)<\/span>/i)?.[1];
+  if (twister) {
+    const t = stripHtml(twister);
+    if (t) picks.push(t);
+  }
+
+  // JSON-LD hints (color/size) if present
+  const color = html.match(/"color"\s*:\s*"([^"]+)"/i)?.[1];
+  const size  = html.match(/"size"\s*:\s*"([^"]+)"/i)?.[1];
+  if (color) picks.push(color);
+  if (size)  picks.push(size);
+
+  // Deduplicate and join
+  const uniq = [...new Set(picks.filter(Boolean))];
+  const variant = uniq.join(" • ");
+  return variant || ""; // empty string if none found
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
-async function fetchWithBee(targetUrl, {
-  waitMs = 2500,
-  retries = 2,
-} = {}) {
+async function fetchWithBee(targetUrl, { waitMs = 2500, retries = 2 } = {}) {
   if (!BEE_KEY) throw new Error("Missing SCRAPINGBEE_API_KEY");
 
   const params = [
@@ -72,7 +105,9 @@ async function fetchWithBee(targetUrl, {
 
 export async function scrapeNameAndPrice(targetUrl) {
   const html = await fetchWithBee(targetUrl);
-  const { name, price } = extractNamePrice(html);
+  const name = extractName(html);
+  const price = extractPrice(html);
+  const variant = extractVariant(html);
 
   let fallbackName = name;
   try {
@@ -86,5 +121,10 @@ export async function scrapeNameAndPrice(targetUrl) {
     if (!fallbackName) fallbackName = "Item (name not found)";
   }
 
-  return { name: fallbackName.trim(), price, htmlSnippet: html.slice(0, 1000) };
+  return {
+    name: fallbackName.trim(),
+    price,
+    variant,                          // <-- returned to frontend
+    htmlSnippet: html.slice(0, 1000)
+  };
 }
