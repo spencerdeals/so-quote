@@ -1,4 +1,4 @@
-// scraper/bee.js — accurate price (prefers core price), clean name, variant, image
+// scraper/bee.js — accurate price (prefers core buy price), plus name, variant, image
 import axios from "axios";
 
 const BEE_BASE = "https://app.scrapingbee.com/api/v1";
@@ -10,7 +10,7 @@ const toNumber = (s) => Number(String(s || "").replace(/[^\d.]/g, "") || NaN);
 function extractBetween(html, startId) {
   const idx = html.indexOf(startId);
   if (idx < 0) return "";
-  return html.slice(idx, idx + 5000); // read a window near the price block
+  return html.slice(idx, idx + 6000); // local window near price
 }
 
 function extractName(html) {
@@ -21,27 +21,28 @@ function extractName(html) {
 }
 
 function extractPrice(html) {
-  // 1) Prefer the core price block (avoid strikethrough a-text-price)
-  const core = extractBetween(html, 'id="corePriceDisplay_desktop_feature_div"') ||
-               extractBetween(html, 'id="corePrice_feature_div"');
+  // 1) Core price blocks (avoid strikethrough sections)
+  const core =
+    extractBetween(html, 'id="corePriceDisplay_desktop_feature_div"') ||
+    extractBetween(html, 'id="corePrice_feature_div"');
   let m =
-    core.match(/class="a-price[^"]*">\s*<span[^>]*class="a-offscreen"[^>]*>\s*\$?\s*([\d,]+(?:\.\d{2})?)\s*<\/span>/i) ||
+    core.replace(/a-text-price/gi, "") // drop “was” price sections
+        .match(/class="a-price[^"]*">\s*<span[^>]*class="a-offscreen"[^>]*>\s*\$?\s*([\d,]+(?:\.\d{2})?)\s*<\/span>/i) ||
     html.match(/id="priceblock_(?:dealprice|ourprice|saleprice)"[^>]*>\s*\$?\s*([\d,]+(?:\.\d{2})?)/i);
   if (m) return toNumber(m[1]);
 
-  // 2) JSON-LD offers.price (skip if it's clearly a strikethrough block)
+  // 2) JSON-LD offers.price (USD)
   const jsonPrice =
     html.match(/"offers"\s*:\s*\{[\s\S]*?"price"\s*:\s*"(\d[\d.,]*)"/i)?.[1] ||
     html.match(/"price"\s*:\s*"(\d[\d.,]*)"\s*,\s*"priceCurrency"\s*:\s*"USD"/i)?.[1];
   if (jsonPrice) return toNumber(jsonPrice);
 
-  // 3) Generic fallback near the core area (avoid a-text-price: strikethrough)
+  // 3) Fallback near core area
   const generic =
-    core.replace(/a-text-price/gi, "") // drop strikethrough sections
-        .match(/\$ ?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
+    core.replace(/a-text-price/gi, "").match(/\$ ?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
   if (generic) return toNumber(generic[1]);
 
-  // 4) Last resort: first currency-like number on page (can be wrong)
+  // 4) Last resort
   const last = html.match(/\$ ?(\d{1,3}(?:,\d{3})*(?:\.\d{2})?)/);
   return last ? toNumber(last[1]) : null;
 }
@@ -49,11 +50,9 @@ function extractPrice(html) {
 function extractVariant(html) {
   const picks = [];
   const selMatches = html.match(/id="variation_[^"]+"\s*[^>]*>[\s\S]*?class="selection"[^>]*>([\s\S]*?)<\/[^>]+>/gi);
-  if (selMatches) {
-    for (const m of selMatches) {
-      const val = stripHtml(m.replace(/^[\s\S]*class="selection"[^>]*>/i, "").replace(/<\/[^>]+>[\s\S]*$/i, ""));
-      if (val) picks.push(val);
-    }
+  if (selMatches) for (const m of selMatches) {
+    const val = stripHtml(m.replace(/^[\s\S]*class="selection"[^>]*>/i, "").replace(/<\/[^>]+>[\s\S]*$/i, ""));
+    if (val) picks.push(val);
   }
   const twister = html.match(/class="a-button-selected"[\s\S]*?class="a-button-text"[^>]*>([\s\S]*?)<\/span>/i)?.[1];
   if (twister) picks.push(stripHtml(twister));
@@ -69,17 +68,17 @@ function extractImage(html) {
   if (og) return og;
   const link = html.match(/<link\s+rel=["']image_src["']\s+href=["']([^"']+)["']/i)?.[1];
   if (link) return link;
-  const jsonStr = html.match(/"image"\s*:\s*"(https?:[^"]+)"/i)?.[1];
-  if (jsonStr) return jsonStr;
-  const jsonArr = html.match(/"image"\s*:\s*\[\s*"(https?:[^"]+)"/i)?.[1];
-  if (jsonArr) return jsonArr;
+  const j1 = html.match(/"image"\s*:\s*"(https?:[^"]+)"/i)?.[1];
+  if (j1) return j1;
+  const j2 = html.match(/"image"\s*:\s*\[\s*"(https?:[^"]+)"/i)?.[1];
+  if (j2) return j2;
   const cdn = html.match(/https?:\/\/images-(?:na|eu|fe)\.ssl-images-amazon\.com\/[^"' ]+\.(?:jpg|jpeg|png|webp)/i)?.[0];
   return cdn || "";
 }
 
 function sleep(ms){ return new Promise(r=>setTimeout(r,ms)); }
 
-async function fetchWithBee(targetUrl, { waitMs = 3000, retries = 2 } = {}) {
+async function fetchWithBee(targetUrl, { waitMs = 3200, retries = 2 } = {}) {
   if (!BEE_KEY) throw new Error("Missing SCRAPINGBEE_API_KEY");
   const params = [
     `api_key=${BEE_KEY}`,
@@ -125,8 +124,9 @@ export async function scrapeNameAndPrice(targetUrl) {
   try {
     const u = new URL(targetUrl);
     if (!fallbackName) {
-      fallbackName = u.pathname.split("/").filter(Boolean).slice(0, -1).join(" ").replace(/[-_]/g, " ") ||
-                     `${u.hostname.replace(/^www\./, "")} item (name not found)`;
+      fallbackName =
+        u.pathname.split("/").filter(Boolean).slice(0, -1).join(" ").replace(/[-_]/g, " ") ||
+        `${u.hostname.replace(/^www\./, "")} item (name not found)`;
     }
   } catch {
     if (!fallbackName) fallbackName = "Item (name not found)";
