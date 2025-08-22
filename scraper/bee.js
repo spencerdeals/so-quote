@@ -1,8 +1,12 @@
-// scraper/bee.js — corrected version (removed custom_headers param)
+// scraper/bee.js — corrected version with HTML stripping for clean names
 import axios from "axios";
 
 const BEE_BASE = "https://app.scrapingbee.com/api/v1";
 const BEE_KEY = process.env.SCRAPINGBEE_API_KEY;
+
+function stripHtml(raw) {
+  return raw.replace(/<[^>]+>/g, "").replace(/\s+/g, " ").trim();
+}
 
 function extractNamePrice(html) {
   const nameMatch =
@@ -14,7 +18,7 @@ function extractNamePrice(html) {
     html.match(/class="a-offscreen">\$?(\d[\d.,]*)</i)?.[1] ||
     html.match(/itemprop="price"[^>]*content="(\d[\d.,]*)"/i)?.[1] ||
     html.match(/\$ ?(\d{1,3}(?:[,]\d{3})*(?:\.\d{2})?)/)?.[1] || "";
-  const name = nameMatch.toString().replace(/\s+/g, " ").trim();
+  const name = stripHtml(nameMatch.toString());
   const price = priceMatch ? Number(priceMatch.replace(/[,$]/g, "")) : null;
   return { name, price };
 }
