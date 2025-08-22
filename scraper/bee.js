@@ -1,4 +1,4 @@
-// scraper/bee.js — returns clean name, price, and variant
+// scraper/bee.js — returns clean name, price, variant, and image (thumbnail)
 import axios from "axios";
 
 const BEE_BASE = "https://app.scrapingbee.com/api/v1";
@@ -24,14 +24,8 @@ function extractPrice(html) {
 }
 
 function extractVariant(html) {
-  // Amazon common selected variant nodes:
-  //   #variation_color_name .selection
-  //   #variation_size_name .selection
-  //   #variation_style_name .selection
-  //   .twister .a-button-selected .a-button-text
   const picks = [];
-
-  // #variation_* .selection → "Dark Gray" / "Queen" / "Right Sitting Chaise"
+  // Amazon "selection" fields
   const selMatches = html.match(/id="variation_[^"]+"\s*[^>]*>[\s\S]*?class="selection"[^>]*>([\s\S]*?)<\/[^>]+>/gi);
   if (selMatches) {
     for (const m of selMatches) {
@@ -39,24 +33,44 @@ function extractVariant(html) {
       if (val) picks.push(val);
     }
   }
-
-  // Twister selected pill text
+  // Twister selected chip
   const twister = html.match(/class="a-button-selected"[\s\S]*?class="a-button-text"[^>]*>([\s\S]*?)<\/span>/i)?.[1];
   if (twister) {
     const t = stripHtml(twister);
     if (t) picks.push(t);
   }
-
-  // JSON-LD hints (color/size) if present
+  // JSON-LD color/size
   const color = html.match(/"color"\s*:\s*"([^"]+)"/i)?.[1];
   const size  = html.match(/"size"\s*:\s*"([^"]+)"/i)?.[1];
   if (color) picks.push(color);
   if (size)  picks.push(size);
 
-  // Deduplicate and join
   const uniq = [...new Set(picks.filter(Boolean))];
-  const variant = uniq.join(" • ");
-  return variant || ""; // empty string if none found
+  return uniq.join(" • ");
+}
+
+function extractImage(html) {
+  // 1) og:image
+  const og = html.match(/<meta\s+(?:property|name)=["']og:image["']\s+content=["']([^"']+)["']/i)?.[1];
+  if (og) return og;
+
+  // 2) link rel="image_src"
+  const link = html.match(/<link\s+rel=["']image_src["']\s+href=["']([^"']+)["']/i)?.[1];
+  if (link) return link;
+
+  // 3) JSON-LD "image": may be string or array
+  const jsonImageStr = html.match(/"image"\s*:\s*"(https?:[^"]+)"/i)?.[1];
+  if (jsonImageStr) return jsonImageStr;
+  const jsonImageArr = html.match(/"image"\s*:\s*\[\s*"(https?:[^"]+)"/i)?.[1];
+  if (jsonImageArr) return jsonImageArr;
+
+  // 4) Fallback: first https image from Amazon CDN on page
+  const cdn = html.match(/https?:\/\/images-(?:na|eu|fe)\.ssl-images-amazon\.com\/[^"' ]+\.(?:jpg|jpeg|png|webp)/i)?.[0];
+  if (cdn) return cdn;
+
+  // 5) Last resort: any https image
+  const anyImg = html.match(/https?:\/\/[^"' ]+\.(?:jpg|jpeg|png|webp)/i)?.[0];
+  return anyImg || "";
 }
 
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
@@ -108,6 +122,7 @@ export async function scrapeNameAndPrice(targetUrl) {
   const name = extractName(html);
   const price = extractPrice(html);
   const variant = extractVariant(html);
+  const image = extractImage(html);
 
   let fallbackName = name;
   try {
@@ -124,7 +139,8 @@ export async function scrapeNameAndPrice(targetUrl) {
   return {
     name: fallbackName.trim(),
     price,
-    variant,                          // <-- returned to frontend
+    variant: variant || "",
+    image,                            // <-- NEW
     htmlSnippet: html.slice(0, 1000)
   };
 }
