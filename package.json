@@ -1,7 +1,7 @@
 {
   "name": "sdl-instant-quote-backend",
   "version": "1.0.0",
-  "description": "SDL Instant Quote backend (serves UI, health, and /quote proxy)",
+  "description": "SDL Instant Quote backend (serves full 3-step UI, health, and /quote proxy)",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
@@ -12,7 +12,8 @@
     "cors": "^2.8.5",
     "express": "^4.19.2",
     "helmet": "^7.1.0",
-    "morgan": "^1.10.0"
+    "morgan": "^1.10.0",
+    "node-fetch": "^3.3.2"
   },
   "engines": {
     "node": ">=18"
