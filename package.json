@@ -1,6 +1,8 @@
 {
-  "name": "instant-quote-backend",
+  "name": "so-quote-backend",
   "version": "1.0.0",
+  "description": "SDL Instant Quote backend (#alpha) \u2014 serves UI and health endpoints",
+  "main": "index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node index.js"
