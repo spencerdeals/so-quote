@@ -1,9 +1,9 @@
-// Instant Quote Backend — #alpha landed cost patch (flat 25% duty)
-// Full paste-and-replace file for index.js
-// Version: alpha-landed-2 (2025-08-23)
+// Instant Quote Backend — #alpha landed cost patch (flat 25% duty, CommonJS)
+// Full paste-and-replace file for index.js (CommonJS to avoid ESM issues)
+// Version: alpha-landed-3-cjs (2025-08-23)
 
-import express from "express";
-import cors from "cors";
+const express = require("express");
+const cors = require("cors");
 
 const app = express();
 app.use(cors());
@@ -13,7 +13,7 @@ app.use(express.json({ limit: "2mb" }));
 // Freight assumption: consolidated 20' container @ $6,000, ~75% full ⇒ ~$6.00/ft³ (hidden)
 const DEFAULT_FREIGHT_RATE_PER_FT3 = 6.0;
 
-// Default carton volume when unknown (ft³) — from SDL reference
+// Default carton volume when unknown (ft³)
 const DEFAULT_VOLUME_FT3 = 11.33;
 
 // US sales tax when vendors ship to FFF NJ warehouse
@@ -33,12 +33,12 @@ function roundRetail95(n) {
 
 // Core landed cost calculator
 function computeLanded({
-  firstCost,          
-  qty = 1,            
-  volumeFt3,          
-  category = "other", 
+  firstCost,
+  qty = 1,
+  volumeFt3,
+  category = "other",
   freightRatePerFt3 = DEFAULT_FREIGHT_RATE_PER_FT3,
-  applyUsSalesTax = true,         
+  applyUsSalesTax = true,
   usSalesTaxRate = DEFAULT_US_SALES_TAX_RATE,
 }) {
   const v = typeof volumeFt3 === "number" && volumeFt3 > 0 ? volumeFt3 : DEFAULT_VOLUME_FT3;
@@ -60,7 +60,7 @@ function computeLanded({
   else if (landedUnit > 1000) marginPct = Math.min(marginPct, 0.25);
 
   const retailUnitRaw = landedUnit * (1 + marginPct);
-  const cardFeePct = 0.0325; 
+  const cardFeePct = 0.0325;
   const retailUnitWithFee = retailUnitRaw * (1 + cardFeePct);
   const retailUnit = roundRetail95(retailUnitWithFee);
   const retailTotal = retailUnit * qty;
@@ -87,7 +87,7 @@ function computeLanded({
 }
 
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha-landed-2", calc: "landed+retail-flat25" });
+  res.json({ ok: true, version: "alpha-landed-3-cjs", calc: "landed+retail-flat25" });
 });
 
 app.post("/quote", (req, res) => {
@@ -113,7 +113,7 @@ app.post("/quote", (req, res) => {
 
     res.json({
       ok: true,
-      version: "alpha-landed-2",
+      version: "alpha-landed-3-cjs",
       defaults: {
         freightRatePerFt3: DEFAULT_FREIGHT_RATE_PER_FT3,
         defaultVolumeFt3: DEFAULT_VOLUME_FT3,
@@ -144,7 +144,7 @@ app.get("/quote", (req, res) => {
   const freightRatePerFt3 = q.freightRatePerFt3 !== undefined ? Number(q.freightRatePerFt3) : undefined;
   const applyUsSalesTax = q.applyUsSalesTax !== undefined ? q.applyUsSalesTax === "true" || q.applyUsSalesTax === true : true;
   const result = computeLanded({ firstCost, qty, volumeFt3, category, freightRatePerFt3, applyUsSalesTax });
-  res.json({ ok: true, version: "alpha-landed-2", results: [ { index: 0, ...result } ], totals: { landed: result.breakdown.total.landed, customer: result.customer.total } });
+  res.json({ ok: true, version: "alpha-landed-3-cjs", results: [ { index: 0, ...result } ], totals: { landed: result.breakdown.total.landed, customer: result.customer.total } });
 });
 
 const PORT = process.env.PORT || 3000;
