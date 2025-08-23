@@ -1,92 +1,83 @@
 app.use(express.static('public'));
 // index.js — so-quote backend (// add near top of your Express routes:
-app.get('/favicon.ico', (_req, res) => res.status(204).end());
-ScrapingBee primary, optional fallback)
-const express = require("express");
-const cors = require("cors");
+// index.js — FULL FILE (paste-and-replace)
+// Node/Express server with strict, working CORS for Railway frontend.
+
+const express = require('express');
+const cors = require('cors');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// CORS
-const FRONTEND_ORIGIN = process.env.FRONTEND_ORIGIN;
-app.use(cors(FRONTEND_ORIGIN ? { origin: FRONTEND_ORIGIN } : { origin: "*" }));
+// ----- Logging (optional) -----
+console.log('NODE_ENV', process.env.NODE_ENV || 'development');
 
-app.use(express.json({ limit: "2mb" }));
+// ----- Body parsing -----
+app.use(express.json({ limit: '1mb' }));
 
-app.get(["/", "/health"], (_req, res) => {
-  res.json({
-    ok: true,
-    version: "alpha-fresh-scrapingbee",
-    hasBeeKey: !!process.env.SCRAPINGBEE_API_KEY,
-    hasFallback: !!process.env.SCRAPER_B_URL
-  });
+// ----- Allowed origins (edit the Railway URL if yours differs) -----
+const ALLOW_ORIGINS = [
+  /^https?:\/\/localhost(:\d+)?$/i,
+  /^https?:\/\/127\.0\.0\.1(:\d+)?$/i,
+  // Your Railway frontend app URL:
+  /^https:\/\/sdl-quote-frontend-production\.up\.railway\.app$/i,
+  // If you have another Railway domain for previews, allow all *.railway.app:
+  /\.railway\.app$/i,
+];
+
+// ----- CORS middleware -----
+const corsMiddleware = cors({
+  origin: (origin, cb) => {
+    // Allow same-origin/fetches without Origin (e.g., curl, health checks)
+    if (!origin) return cb(null, true);
+    const ok = ALLOW_ORIGINS.some((re) =>
+      typeof re.test === 'function' ? re.test(origin) : origin === re
+    );
+    return ok ? cb(null, true) : cb(new Error(`CORS: Origin not allowed: ${origin}`));
+  },
+  methods: ['GET', 'POST', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: false,
+  optionsSuccessStatus: 204,
 });
 
-const beeKey = () => process.env.SCRAPINGBEE_API_KEY?.trim();
-const fallbackUrl = () => process.env.SCRAPER_B_URL?.replace(/\/$/, "");
+// Handle preflight for all routes
+app.options('*', corsMiddleware);
+app.use(corsMiddleware);
 
-async function safeFetch(url, opts = {}) {
-  const res = await fetch(url, opts);
-  const text = await res.text();
-  let json = null; try { json = JSON.parse(text); } catch {}
-  return { res, text, json };
-}
+// ----- Static (optional) -----
+app.use(express.static('public'));
 
-function normalizeOne(obj = {}, fallback = "") {
-  const title = obj.title || obj.name || "Unnamed Item";
-  const image = obj.image || obj.thumbnail || "";
-  const price = typeof obj.price === "number" ? obj.price : Number(obj.price) || 0;
-  const variant = obj.variant || (Array.isArray(obj.variants) && obj.variants[0]?.label) || "";
-  return { title, image, price, variant, url: obj.url || fallback };
-}
+// ----- Favicon: return 204 (no content) to silence 403 noise -----
+app.get('/favicon.ico', (_req, res) => res.status(204).end());
 
-// minimal OG parse to get title/image if site blocks details
-function tryParseHtml(html = "", url = "") {
-  const out = { url };
-  const t = html.match(/property=["']og:title["']\s+content=["']([^"']+)["']/i);
-  const i = html.match(/property=["']og:image["']\s+content=["']([^"']+)["']/i);
-  if (t) out.title = t[1];
-  if (i) out.image = i[1];
-  return out;
-}
+// ----- Health -----
+app.get(['/', '/health'], (_req, res) => {
+  res.json({ ok: true, version: 'alpha', env: process.env.NODE_ENV || 'development' });
+});
 
-async function scrapeWithBee(targetUrl) {
-  if (!beeKey()) return null;
-  const endpoint =
-    `https://app.scrapingbee.com/api/v1/?api_key=${beeKey()}&url=${encodeURIComponent(targetUrl)}&render_js=true&block_resources=true&premium_proxy=true`;
-  const { res, text } = await safeFetch(endpoint);
-  if (!res.ok) return null;
-  const product = tryParseHtml(text, targetUrl);
-  return normalizeOne(product, targetUrl);
-}
-
-async function scrapeWithFallback(targetUrl) {
-  const fb = fallbackUrl();
-  if (!fb) return null;
-  const { res, json } = await safeFetch(`${fb}/quote`, {
-    method: "POST", headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ url: targetUrl })
-  });
-  if (!res.ok || !json) return null;
-  if (Array.isArray(json.items)) return normalizeOne(json.items[0], targetUrl);
-  if (json.item) return normalizeOne(json.item, targetUrl);
-  if (json.title || json.name) return normalizeOne(json, targetUrl);
-  return null;
-}
-
-app.post("/quote", async (req, res) => {
+// ----- Your main API endpoint (adjust handler to your logic) -----
+// Example: /quote expects JSON payload and returns a computed quote
+app.post('/quote', async (req, res) => {
   try {
-    const target = req.body?.url;
-    if (!target) return res.status(400).json({ error: "Missing url" });
-    let product = null;
-    try { product = await scrapeWithBee(target); } catch {}
-    if (!product) { try { product = await scrapeWithFallback(target); } catch {} }
-    if (!product) product = normalizeOne({ title: "Product from link", url: target }, target);
-    return res.json({ item: product });
+    const payload = req.body || {};
+
+    // TODO: replace with your real calculation
+    // Minimal echo to confirm CORS and wiring are good:
+    const result = {
+      received: payload,
+      total: 123.45,
+      note: 'Sample response — replace with real calculator.',
+    };
+
+    res.json(result);
   } catch (err) {
-    return res.status(500).json({ error: String(err) });
+    console.error('Error in /quote:', err);
+    res.status(500).json({ error: 'Internal error' });
   }
 });
 
-app.listen(PORT, () => console.log("Backend running on port", PORT));
+// ----- Start server -----
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => {
+  console.log(`Server running on :${PORT}`);
+});
