@@ -1,6 +1,6 @@
 // index.js — #alpha build (CommonJS) with Amazon + Wayfair via ScrapingBee
 // No ESM required; works with Node 18+ / 20 on Railway.
-// Uses global fetch (available in Node 18+).
+const fetch = (...args) => import('node-fetch').then(({default: fetch}) => fetch(...args));
 
 const express = require("express");
 const dotenv = require("dotenv");
