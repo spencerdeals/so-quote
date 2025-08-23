@@ -1,4 +1,6 @@
-// index.js — so-quote backend (ScrapingBee primary, optional fallback)
+// index.js — so-quote backend (// add near top of your Express routes:
+app.get('/favicon.ico', (_req, res) => res.status(204).end());
+ScrapingBee primary, optional fallback)
 const express = require("express");
 const cors = require("cors");
 
