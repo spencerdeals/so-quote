@@ -1,3 +1,4 @@
+app.use(express.static('public'));
 // index.js — so-quote backend (// add near top of your Express routes:
 app.get('/favicon.ico', (_req, res) => res.status(204).end());
 ScrapingBee primary, optional fallback)
