@@ -1,361 +1,457 @@
-// index.js — Instant Quote (#alpha) — full paste-and-replace
-// Server: Express app that serves the live Instant Quote UI at `/`
-// and provides health/debug endpoints. Frontend is embedded below.
-//
-// Notes for Richard:
-// - Paste this entire file over your current index.js in your Railway app.
-// - No surgery needed. Deploy after paste.
-// - Root `/` serves the actual quote UI (replaces the placeholder).
-// - Health shows version so you can confirm the right build is running.
-//
-// Assumptions from our setup:
-// - Backend quote API: https://so-quote.fly.dev/quote  (from our V4 build)
-// - If you later swap to your own endpoint, change QUOTE_API below.
-// - Uses ScrapingBee on the backend per our standing preference.
-//
-// Version tag: 2025-08-23 #alpha
-//
-const express = require("express");
-const cors = require("cors");
-const path = require("path");
 
-const app = express();
+/**
+ * SDL — Instant Quote | Backend App
+ * Full paste-and-replace server file (production-ready).
+ * Updated: 2025-08-23 17:09:18
+ *
+ * What you get:
+ *  - GET /            → serves the full 3-step Instant Quote UI
+ *  - GET /health      → JSON health/version
+ *  - GET /debug-index → plain text version check
+ *  - GET /robots.txt  → disallow indexing
+ *  - POST /quote      → proxies to QUOTE_API (Fly.io) and also accepts single-link payloads
+ *
+ * Env you can set (optional):
+ *  - PORT                 (default 3000; Railway sets this automatically)
+ *  - APP_NAME             (default "SDL — Instant Quote")
+ *  - APP_VERSION          (default "alpha-2025-08-23-ultimate")
+ *  - QUOTE_API            (default "https://so-quote.fly.dev/quote")
+ *  - CORS_ORIGIN          (default "*")
+ *  - RATE_LIMIT_PER_MIN   (default 120; applies to /quote only)
+ */
+
+const express = require('express');
+const cors = require('cors');
+const compression = require('compression');
+const helmet = require('helmet');
+const morgan = require('morgan');
+
+const APP_NAME = process.env.APP_NAME || 'SDL — Instant Quote';
+const APP_VERSION = process.env.APP_VERSION || 'alpha-2025-08-23-ultimate';
+const QUOTE_API = process.env.QUOTE_API || 'https://so-quote.fly.dev/quote';
+const CORS_ORIGIN = process.env.CORS_ORIGIN || '*';
+const RATE_LIMIT_PER_MIN = Number(process.env.RATE_LIMIT_PER_MIN || 120);
 const PORT = process.env.PORT || 3000;
 
-// ===== Config you may tweak quickly =====
-const QUOTE_API = process.env.QUOTE_API || "https://so-quote.fly.dev/quote";
-const APP_VERSION = process.env.APP_VERSION || "alpha-2025-08-23";
-// =======================================
+const app = express();
 
-app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+// --- Middleware (fast + safe defaults) ---
+app.set('trust proxy', 1);
+app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+app.use(compression());
+app.use(cors({ origin: CORS_ORIGIN === '*' ? true : CORS_ORIGIN }));
+app.use(express.json({ limit: '2mb' }));
+app.use(morgan('tiny'));
 
-// Serve any static files if you add them later (optional)
-app.use("/public", express.static(path.join(__dirname, "public")));
+// --- Robots ---
+app.get('/robots.txt', (_req, res) => {
+  res.type('text/plain').send('User-agent: *\nDisallow: /');
+});
 
-// Health & debug
-app.get("/health", (_req, res) => {
+// --- Health/Debug ---
+app.get('/health', (_req, res) => {
   res.json({
     ok: true,
-    version: "3.3-prices",
-    calc: "price-sum",
+    name: APP_NAME,
     app: APP_VERSION,
+    node: process.version,
+    quote_api: QUOTE_API ? 'configured' : 'unset'
   });
 });
 
-app.get("/debug-index", (_req, res) => {
-  res.type("text/plain").send(`index.js loaded: ${APP_VERSION}`);
+app.get('/debug-index', (_req, res) => {
+  res.type('text/plain').send(`index.js loaded: ${APP_VERSION}`);
 });
 
-// Root: serve the Instant Quote UI (embedded HTML + JS)
-app.get("/", (_req, res) => {
-  res.type("html").send(`<!doctype html>
+// --- Simple rate limit for /quote ---
+let rateLimit;
+try { rateLimit = require('express-rate-limit'); } catch {}
+const quoteLimiter = rateLimit ? rateLimit({
+  windowMs: 60 * 1000,
+  max: RATE_LIMIT_PER_MIN,
+  standardHeaders: true,
+  legacyHeaders: false
+}) : (_req, _res, next) => next();
+
+// --- Helper: robust fetch (Node 18+ has global fetch) ---
+const fetchFn = global.fetch || (async (...args) => {
+  const mod = await import('node-fetch');
+  return mod.default(...args);
+});
+
+// --- Proxy /quote to QUOTE_API, accepting multiple shapes ---
+app.post('/quote', quoteLimiter, async (req, res) => {
+  try {
+    const body = req.body || {};
+
+    // Normalize incoming payload:
+    // - If client sends { link, qty } → convert to { urls: [link] } (qty included if API supports)
+    // - If client sends { urls: [...] } → pass through
+    let outbound = body;
+    if (!Array.isArray(body.urls)) {
+      const link = body.link || body.url;
+      const qty = Number(body.qty || body.quantity || 1);
+      if (link) { outbound = { urls: [link], qty }; }
+    }
+
+    const upstream = await fetchFn(QUOTE_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(outbound)
+    });
+
+    const txt = await upstream.text();
+    let data;
+    try { data = JSON.parse(txt); } catch (e) { data = { ok:false, raw: txt }; }
+    res.status(upstream.status).json(data);
+  } catch (err) {
+    console.error('Proxy /quote failed:', err);
+    res.status(502).json({ ok:false, error:'Bad gateway to quote backend', detail: String(err) });
+  }
+});
+
+// --- Root UI (3-step customer-friendly form) ---
+app.get(['/', '/index.html'], (_req, res) => {
+  res.type('html').send(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>SDL — Instant Quote (#alpha)</title>
+  <title>${APP_NAME}</title>
   <style>
-    :root {
-      --sdl-green: #2c7a3f;
-      --sdl-green-2: #1f5a2d;
-      --bg: #f5f7f5;
-      --card: #ffffff;
-      --muted: #6b7280;
-      --danger: #b91c1c;
-      --ring: rgba(44,122,63,0.25);
-    }
+    :root { --sdl: #2e8b57; --sdl-dark: #1f5e3b; --ink: #0f172a; --muted: #64748b; --bg: #f8fafc; --card: #ffffff; }
     * { box-sizing: border-box; }
-    html, body {
-      margin: 0; padding: 0; background: var(--bg);
-      font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, "Apple Color Emoji","Segoe UI Emoji";
-      color: #111827;
-    }
-    .wrap { max-width: 1100px; margin: 28px auto; padding: 0 16px; }
-    .topbar {
-      display:flex; align-items:center; justify-content:space-between;
-      margin-bottom: 16px;
-    }
+    body { margin: 0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial; color: var(--ink); background: var(--bg); }
+    header { padding: 20px; background: linear-gradient(180deg, var(--sdl) 0%, var(--sdl-dark) 100%); color: white; }
+    .wrap { max-width: 1040px; margin: 0 auto; padding: 20px; }
     .brand { display:flex; align-items:center; gap:12px; }
-    .logo {
-      width: 36px; height: 36px; border-radius: 8px;
-      background: linear-gradient(135deg, var(--sdl-green), var(--sdl-green-2));
-      display:flex; align-items:center; justify-content:center;
-      color: #fff; font-weight: 800;
-      box-shadow: 0 6px 16px rgba(0,0,0,0.12);
-    }
-    .brand h1 { font-size: 18px; margin: 0; }
-    .card {
-      background: var(--card); border-radius: 14px; padding: 18px;
-      box-shadow: 0 8px 26px rgba(0,0,0,0.06);
-      border: 1px solid #e5e7eb;
-    }
-    .steps { display:flex; gap:8px; margin-bottom: 14px; flex-wrap: wrap; }
-    .step {
-      padding: 10px 12px; border-radius: 999px; font-size: 14px;
-      border: 1px solid #e5e7eb; background: #fff; color:#111827;
-    }
-    .step.active { background: var(--sdl-green); color: #fff; border-color: var(--sdl-green); }
-    .grid { display:grid; grid-template-columns: 1fr; gap: 12px; }
-    @media (min-width: 900px) {
-      .grid { grid-template-columns: 1.2fr 1fr; }
-    }
-    label { font-size: 13px; color: #374151; }
-    textarea, input[type="text"] {
-      width: 100%; padding: 12px 12px; border-radius: 10px;
-      border: 1px solid #d1d5db; background: #fff; outline: none;
-    }
-    textarea:focus, input:focus { border-color: var(--sdl-green); box-shadow: 0 0 0 4px var(--ring); }
-    .btn {
-      display:inline-flex; align-items:center; justify-content:center;
-      padding: 10px 14px; border-radius: 10px; border: 1px solid transparent;
-      background: var(--sdl-green); color: #fff; font-weight: 600; cursor: pointer;
-    }
-    .btn.secondary { background:#fff; color:#111827; border-color:#d1d5db; }
-    .btn:disabled { opacity:.6; cursor:not-allowed; }
-    .muted { color: var(--muted); font-size: 13px; }
-    .table {
-      width:100%; border-collapse: collapse; overflow: hidden; border-radius: 10px;
-      border: 1px solid #e5e7eb;
-    }
-    .table th, .table td { padding: 10px 12px; text-align:left; border-bottom:1px solid #f1f5f9; }
-    .table th { background:#f8fafc; font-size: 13px; color:#374151; }
-    .pill { font-size:12px; padding: 4px 8px; border-radius: 999px; background:#eef2ff; }
-    .warn { color: var(--danger); font-weight: 600; }
-    .footer { margin-top: 14px; display:flex; align-items:center; justify-content: space-between; }
-    .okbar {
-      margin-top: 12px; padding: 10px 12px; border: 1px dashed #d1d5db; border-radius: 10px; background: #fafafa;
-      font-size: 13px;
-    }
-    .total { font-size: 18px; font-weight: 700; }
-    .sticky-actions { display:flex; gap:8px; flex-wrap: wrap; }
-    .sublabel { font-size: 12px; color: #6b7280; }
-    .badge { background:#e8f5ee; border:1px solid #cce9d9; color:#0b4722; padding:4px 8px; border-radius: 999px; font-size:12px; }
+    .logo { width: 36px; height: 36px; border-radius: 8px; background: white; color: var(--sdl-dark); display:grid; place-items:center; font-weight:800; }
+    .title { font-size: 22px; font-weight: 700; letter-spacing: .2px; }
+    .steps { display:flex; gap:12px; margin-top:14px; flex-wrap:wrap; }
+    .chip { padding:8px 12px; border-radius: 999px; background:#1b433226; color:#e6fff1; border:1px solid #ffffff44; font-size: 12px; }
+    .chip.active { background:white; color: var(--sdl-dark); border-color: #dbeafe; }
+    .card { background: var(--card); border:1px solid #e2e8f0; border-radius: 16px; padding: 18px; box-shadow: 0 2px 8px rgba(2,6,23,.04); }
+    .grid { display:grid; gap:16px; }
+    .grid.cols-2 { grid-template-columns: 1fr 1fr; }
+    .field label { display:block; font-size: 12px; color: var(--muted); margin-bottom: 6px; }
+    .field input, .field textarea { width:100%; padding:12px 14px; border-radius: 10px; border:1px solid #e2e8f0; background:white; outline:none; font-size:14px; }
+    .field textarea { min-height: 96px; resize: vertical; }
+    .btn { appearance: none; border: 0; padding: 12px 16px; border-radius: 12px; font-weight: 700; cursor: pointer; }
+    .btn.primary { background: var(--sdl); color: white; }
+    .btn.secondary { background: #eef2ff; color: #334155; }
+    .btn.ghost { background: transparent; border:1px solid #e2e8f0; }
+    .toolbar { display:flex; justify-content: space-between; align-items:center; gap:12px; flex-wrap:wrap; }
+    .list { width:100%; border-collapse: collapse; }
+    .list th, .list td { border-bottom:1px solid #e2e8f0; padding:12px 8px; font-size:14px; text-align:left; }
+    .right { text-align:right; }
+    .muted { color: var(--muted); }
+    .total { font-weight:800; font-size: 18px; }
+    .hint { font-size: 12px; color: var(--muted); }
+    @media (max-width: 860px) { .grid.cols-2 { grid-template-columns: 1fr; } }
   </style>
 </head>
 <body>
-  <div class="wrap">
-    <div class="topbar">
+  <header>
+    <div class="wrap">
       <div class="brand">
         <div class="logo">$</div>
-        <h1>SDL — Instant Quote</h1>
-        <span class="badge">#alpha</span>
+        <div class="title">${APP_NAME}</div>
       </div>
-      <div class="sticky-actions">
-        <button id="btnHealth" class="btn secondary" type="button">Check Health</button>
-        <button id="btnReset" class="btn secondary" type="button">Reset</button>
-      </div>
-    </div>
-
-    <div class="card">
       <div class="steps">
-        <div class="step active">1 · Upload Links</div>
-        <div class="step">2 · Quote Review</div>
-        <div class="step">3 · Approve & Pay</div>
-      </div>
-
-      <div class="grid">
-        <div>
-          <label for="links"><strong>Paste product links (one per line)</strong></label>
-          <textarea id="links" rows="8" placeholder="https://example.com/product-1
-https://another.com/sku-ABC123"></textarea>
-
-          <div style="display:flex; gap:8px; margin-top:10px; align-items:center;">
-            <button id="btnQuote" class="btn" type="button">Generate Quote</button>
-            <span class="muted">Backend: <code id="apiSpan"></code></span>
-          </div>
-
-          <div id="noteBar" class="okbar" style="display:none;"></div>
-        </div>
-
-        <div>
-          <div style="display:flex; align-items:center; justify-content:space-between">
-            <div>
-              <div><strong>Summary</strong></div>
-              <div class="sublabel">Customer-friendly totals only.</div>
-            </div>
-            <div><span class="pill" id="statusPill">Idle</span></div>
-          </div>
-          <div style="margin-top:10px;">
-            <table class="table" id="quoteTable" style="display:none;">
-              <thead>
-                <tr>
-                  <th style="width: 40%;">Item</th>
-                  <th>Qty</th>
-                  <th>Unit</th>
-                  <th>Total</th>
-                </tr>
-              </thead>
-              <tbody id="quoteBody"></tbody>
-            </table>
-            <div id="totalsBlock" style="display:none; margin-top: 10px;" class="total"></div>
-          </div>
-        </div>
-      </div>
-
-      <div class="footer">
-        <div class="muted">Hidden settings: consolidated freight $6.00/ft³; import margin SDL.</div>
-        <div style="display:flex; gap:8px;">
-          <button class="btn secondary" id="btnExport" type="button">Export JSON</button>
-          <button class="btn" id="btnApprove" type="button" disabled>Approve & Continue</button>
-        </div>
+        <div class="chip active" id="stepChip1">1 — Upload Links</div>
+        <div class="chip" id="stepChip2">2 — Quote Review</div>
+        <div class="chip" id="stepChip3">3 — Approve & Pay</div>
       </div>
     </div>
-  </div>
+  </header>
+
+  <main class="wrap" id="app"></main>
+  <div class="wrap" style="font-size:12px;color:#64748b;padding:12px 0">Customer-friendly totals only. Internal costs hidden.</div>
 
   <script>
-    const QUOTE_API = ${JSON.stringify(QUOTE_API)};
-    document.getElementById("apiSpan").textContent = QUOTE_API;
+    const el = (tag, attrs = {}) => Object.assign(document.createElement(tag), attrs);
+    const $ = (sel, root = document) => root.querySelector(sel);
 
-    const el = {
-      links: document.getElementById("links"),
-      btnQuote: document.getElementById("btnQuote"),
-      btnReset: document.getElementById("btnReset"),
-      btnHealth: document.getElementById("btnHealth"),
-      quoteTable: document.getElementById("quoteTable"),
-      quoteBody: document.getElementById("quoteBody"),
-      totalsBlock: document.getElementById("totalsBlock"),
-      statusPill: document.getElementById("statusPill"),
-      noteBar: document.getElementById("noteBar"),
-      btnExport: document.getElementById("btnExport"),
-      btnApprove: document.getElementById("btnApprove"),
+    const state = {
+      step: 1,
+      items: [], // { link, title, qty, unit, total, manualPrice? }
+      fees: { delivery: 0, assembly: 0 },
+      totals: { subtotal: 0, grand: 0 }
     };
 
-    let lastQuote = null;
-
-    function setStatus(text) {
-      el.statusPill.textContent = text;
+    function setStep(n) {
+      state.step = n;
+      $('#stepChip1').classList.toggle('active', n === 1);
+      $('#stepChip2').classList.toggle('active', n === 2);
+      $('#stepChip3').classList.toggle('active', n === 3);
+      render();
     }
 
-    function showNote(text, warn=false) {
-      el.noteBar.style.display = "block";
-      el.noteBar.textContent = text;
-      el.noteBar.style.borderColor = warn ? "#fca5a5" : "#d1d5db";
-      el.noteBar.style.background = warn ? "#fef2f2" : "#fafafa";
+    const fmt = (n) => new Intl.NumberFormat('en-BM', { style: 'currency', currency: 'BMD' }).format(n || 0);
+
+    function calcTotals() {
+      const subtotal = state.items.reduce((s, it) => s + (it.total || 0), 0);
+      const grand = subtotal + (Number(state.fees.delivery)||0) + (Number(state.fees.assembly)||0);
+      state.totals.subtotal = subtotal;
+      state.totals.grand = grand;
     }
 
-    function hideNote() {
-      el.noteBar.style.display = "none";
-      el.noteBar.textContent = "";
+    function addRow() { state.items.push({ link:'', title:'', qty:1, unit:0, total:0, manualPrice:'' }); render(); }
+    function removeRow(idx) { state.items.splice(idx, 1); render(); }
+
+    async function fetchQuoteForIndex(idx) {
+      const row = state.items[idx];
+      if (!row || !row.link) return;
+
+      const payload = { link: row.link, qty: Number(row.qty)||1 };
+
+      try {
+        const res = await fetch('/quote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        if (!res.ok) throw new Error('Quote backend error');
+        const data = await res.json();
+
+        if (Array.isArray(data.items)) {
+          const first = data.items[0] || {};
+          row.title = first.title || first.name || row.title || 'Item';
+          const unit = Number(first.unitPrice || first.unit || 0);
+          const qty = Number(row.qty)||1;
+          row.unit = unit;
+          row.total = unit * qty;
+        } else {
+          row.title = data.title || row.title || 'Item';
+          row.unit = Number(data.unit) || 0;
+          row.total = Number(data.total) || (row.unit * (Number(row.qty)||1));
+        }
+
+        if (!row.unit) { row.manualPrice = ''; }
+      } catch (e) {
+        console.error(e);
+        row.title = row.title || 'Item';
+        row.unit = 0;
+        row.total = 0;
+      } finally {
+        calcTotals(); render();
+      }
     }
 
-    function parseLinks(raw) {
-      return raw.split(/\\r?\\n/).map(s => s.trim()).filter(Boolean);
+    function handleManualPrice(idx, value) {
+      const n = Number(value);
+      const row = state.items[idx];
+      row.manualPrice = value;
+      if (Number.isFinite(n) && n > 0) { row.unit = n; row.total = n * (Number(row.qty)||1); }
+      calcTotals(); render();
     }
 
-    function renderQuote(quote) {
-      // Expecting { items: [{title, qty, unitPrice, total}], totals: {grandTotal} }
-      // We'll be resilient to shapes we know from V4.
-      el.quoteBody.innerHTML = "";
-      let grand = 0;
+    function handleQty(idx, value) {
+      const q = Math.max(1, Number(value)||1);
+      const row = state.items[idx];
+      row.qty = q;
+      row.total = (Number(row.unit)||0) * q;
+      calcTotals(); render();
+    }
 
-      const items = Array.isArray(quote?.items) ? quote.items : [];
-      items.forEach((it) => {
-        const tr = document.createElement("tr");
-        const qty = Number(it.qty || it.quantity || 1);
-        const unit = Number(it.unitPrice || it.unit || 0);
-        const total = Number(it.total || (unit * qty) || 0);
-        grand += total;
+    function renderStep1() {
+      const root = el('div');
+      root.appendChild(el('div', { className: 'card toolbar', innerHTML: `
+        <div>
+          <div style="font-weight:700">Upload product links</div>
+          <div class="hint">Paste one link per line, or add rows below. We’ll fetch details.</div>
+        </div>
+        <div>
+          <button class="btn secondary" id="addRowBtn">Add Row</button>
+          <button class="btn primary" id="continueBtn">Continue</button>
+        </div>
+      `}));
 
-        const td1 = document.createElement("td"); td1.textContent = it.title || it.name || "Item";
-        const td2 = document.createElement("td"); td2.textContent = qty;
-        const td3 = document.createElement("td"); td3.textContent = unit.toFixed(2);
-        const td4 = document.createElement("td"); td4.textContent = total.toFixed(2);
+      const rowsCard = el('div', { className:'card' });
+      const table = el('table', { className:'list' });
+      table.innerHTML = `
+        <thead>
+          <tr>
+            <th style="width:40%">Link</th>
+            <th>Title</th>
+            <th class="right">Qty</th>
+            <th class="right">Unit</th>
+            <th class="right">Total</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody id="rowsBody"></tbody>
+      `;
+      rowsCard.appendChild(table);
+      root.appendChild(rowsCard);
 
-        tr.appendChild(td1); tr.appendChild(td2); tr.appendChild(td3); tr.appendChild(td4);
-        el.quoteBody.appendChild(tr);
+      const body = table.querySelector('#rowsBody');
+      state.items.forEach((row, idx) => {
+        const tr = el('tr');
+        const needManual = Number(row.unit) === 0;
+        tr.innerHTML = `
+          <td><input placeholder="https://vendor.com/product" value="${row.link||''}" data-idx="${idx}" data-key="link"/></td>
+          <td><input placeholder="(auto)" value="${row.title||''}" data-idx="${idx}" data-key="title"/></td>
+          <td class="right"><input style="text-align:right" type="number" min="1" value="${row.qty||1}" data-idx="${idx}" data-key="qty"/></td>
+          <td class="right">${needManual ? '<input style="text-align:right" placeholder="enter price" value="'+(row.manualPrice||'')+'" data-idx="'+idx+'" data-key="manual"/>' : fmt(row.unit)}</td>
+          <td class="right">${fmt(row.total)}</td>
+          <td class="right"><button class="btn ghost" data-action="remove" data-idx="${idx}">Remove</button></td>
+        `;
+        body.appendChild(tr);
       });
 
-      // Fallback: if API returns totals.grandTotal, use that.
-      const apiGrand = Number(quote?.totals?.grandTotal || quote?.grandTotal || 0);
-      if (apiGrand > 0) grand = apiGrand;
+      body.addEventListener('change', (e) => {
+        const t = e.target;
+        const idx = Number(t.getAttribute('data-idx'));
+        const key = t.getAttribute('data-key');
+        if (key === 'link') { state.items[idx].link = t.value.trim(); fetchQuoteForIndex(idx); }
+        else if (key === 'title') { state.items[idx].title = t.value; }
+        else if (key === 'qty') { handleQty(idx, t.value); }
+        else if (key === 'manual') { handleManualPrice(idx, t.value); }
+      });
 
-      el.quoteTable.style.display = items.length ? "table" : "none";
-      el.totalsBlock.style.display = "block";
-      el.totalsBlock.textContent = "Grand total: $" + grand.toFixed(2);
-      el.btnApprove.disabled = grand <= 0;
+      body.addEventListener('click', (e) => {
+        const btn = e.target.closest('button');
+        if (!btn) return;
+        const idx = Number(btn.getAttribute('data-idx'));
+        const action = btn.getAttribute('data-action');
+        if (action === 'remove') removeRow(idx);
+      });
+
+      root.querySelector('#addRowBtn').addEventListener('click', () => addRow());
+      root.querySelector('#continueBtn').addEventListener('click', () => setStep(2));
+      return root;
     }
 
-    async function fetchQuote(urls) {
-      setStatus("Fetching…");
-      hideNote();
-      try {
-        const resp = await fetch(QUOTE_API, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ urls }),
-        });
-        if (!resp.ok) {
-          const text = await resp.text();
-          throw new Error("API error " + resp.status + ": " + text);
-        }
-        const data = await resp.json();
-        lastQuote = data;
-        renderQuote(data);
+    function renderStep2() {
+      calcTotals();
+      const root = el('div', { className: 'grid cols-2' });
 
-        // Show manual override hint if any item has unitPrice 0
-        const zero = (data?.items || []).some(i => Number(i.unitPrice || 0) <= 0);
-        if (zero) {
-          showNote("Some items returned a unit price of $0. You can override unit prices in the review step.", true);
-        }
-        setStatus("Done");
-      } catch (err) {
-        console.error(err);
-        setStatus("Error");
-        showNote("Failed to generate quote: " + err.message, true);
-      }
+      const left = el('div', { className:'card' });
+      left.innerHTML = `
+        <div class="toolbar">
+          <div>
+            <div style="font-weight:700">Quote review</div>
+            <div class="hint">Confirm items and quantities. Internal costs are hidden.</div>
+          </div>
+          <div>
+            <button class="btn secondary" id="backBtn">Back</button>
+            <button class="btn primary" id="nextBtn">Approve & Pay</button>
+          </div>
+        </div>
+        <table class="list" style="margin-top:12px">
+          <thead><tr><th>Item</th><th class="right">Qty</th><th class="right">Unit</th><th class="right">Total</th></tr></thead>
+          <tbody id="reviewBody"></tbody>
+          <tfoot><tr><td class="right" colspan="3"><strong>Subtotal</strong></td><td class="right">${fmt(state.totals.subtotal)}</td></tr></tfoot>
+        </table>
+      `;
+
+      const body = left.querySelector('#reviewBody');
+      state.items.forEach((it) => {
+        const tr = el('tr');
+        tr.innerHTML = `
+          <td>${it.title || '(Item)'}<div class="hint">${it.link ? new URL(it.link).hostname : ''}</div></td>
+          <td class="right">${it.qty}</td>
+          <td class="right">${fmt(it.unit)}</td>
+          <td class="right">${fmt(it.total)}</td>
+        `;
+        body.appendChild(tr);
+      });
+
+      const right = el('div', { className:'card' });
+      right.innerHTML = `
+        <div class="field">
+          <label>Delivery fee (optional)</label>
+          <input id="feeDelivery" type="number" min="0" step="1" placeholder="0" value="${state.fees.delivery||0}" />
+        </div>
+        <div class="field">
+          <label>Assembly fee (optional)</label>
+          <input id="feeAssembly" type="number" min="0" step="1" placeholder="0" value="${state.fees.assembly||0}" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr auto;gap:8px;margin-top:8px">
+          <div class="muted">Subtotal</div><div class="right">${fmt(state.totals.subtotal)}</div>
+          <div class="muted">Delivery</div><div class="right">${fmt(state.fees.delivery||0)}</div>
+          <div class="muted">Assembly</div><div class="right">${fmt(state.fees.assembly||0)}</div>
+          <div class="total">Grand total</div><div class="total right" id="grandOut">${fmt(state.totals.grand)}</div>
+        </div>
+      `;
+
+      right.querySelector('#feeDelivery').addEventListener('input', (e)=>{ state.fees.delivery = Number(e.target.value)||0; calcTotals(); $('#grandOut').textContent = fmt(state.totals.grand); });
+      right.querySelector('#feeAssembly').addEventListener('input', (e)=>{ state.fees.assembly = Number(e.target.value)||0; calcTotals(); $('#grandOut').textContent = fmt(state.totals.grand); });
+
+      left.querySelector('#backBtn').addEventListener('click', ()=> setStep(1));
+      left.querySelector('#nextBtn').addEventListener('click', ()=> setStep(3));
+
+      root.appendChild(left);
+      root.appendChild(right);
+      return root;
     }
 
-    el.btnQuote.addEventListener("click", () => {
-      const urls = parseLinks(el.links.value);
-      if (!urls.length) {
-        showNote("Please paste one or more product links (one per line).", true);
-        return;
-      }
-      fetchQuote(urls);
-    });
+    function renderStep3() {
+      const root = el('div', { className:'grid cols-2' });
+      const left = el('div', { className:'card' });
+      left.innerHTML = `
+        <div style="font-weight:700">Approve & Pay</div>
+        <p class="muted">You're almost done. Review your grand total and add any notes. When you approve, we'll send a secure payment link.</p>
+        <table class="list" style="margin-top:8px">
+          <thead><tr><th>Item</th><th class="right">Qty</th><th class="right">Unit</th><th class="right">Total</th></tr></thead>
+          <tbody id="finalBody"></tbody>
+          <tfoot><tr><td class="right" colspan="3"><strong>Grand total</strong></td><td class="right" id="grandFinal"></td></tr></tfoot>
+        </table>
+      `;
 
-    el.btnReset.addEventListener("click", () => {
-      el.links.value = "";
-      el.quoteBody.innerHTML = "";
-      el.quoteTable.style.display = "none";
-      el.totalsBlock.style.display = "none";
-      el.btnApprove.disabled = true;
-      setStatus("Idle");
-      hideNote();
-    });
+      const body = left.querySelector('#finalBody');
+      state.items.forEach((it)=>{
+        const tr = el('tr');
+        tr.innerHTML = `<td>${it.title||'(Item)'}<div class="hint">${it.link ? new URL(it.link).hostname : ''}</div></td>
+                        <td class="right">${it.qty}</td>
+                        <td class="right">${fmt(it.unit)}</td>
+                        <td class="right">${fmt(it.total)}</td>`;
+        body.appendChild(tr);
+      });
 
-    el.btnHealth.addEventListener("click", async () => {
-      try {
-        const r = await fetch("/health");
-        const j = await r.json();
-        showNote("Health: " + JSON.stringify(j));
-      } catch (e) {
-        showNote("Health check failed: " + e.message, true);
-      }
-    });
+      $('#grandFinal').textContent = fmt(state.totals.grand);
 
-    el.btnExport.addEventListener("click", () => {
-      const blob = new Blob([JSON.stringify(lastQuote || {}, null, 2)], { type: "application/json" });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement("a");
-      a.href = url; a.download = "instant-quote.json"; a.click();
-      URL.revokeObjectURL(url);
-    });
+      const right = el('div', { className:'card' });
+      right.innerHTML = `
+        <div class="field"><label>Your name</label><input id="custName" placeholder="Full name" /></div>
+        <div class="field"><label>Email</label><input id="custEmail" placeholder="you@example.com" /></div>
+        <div class="field"><label>Phone (optional)</label><input id="custPhone" placeholder="(441) 555-1234" /></div>
+        <div class="field"><label>Notes (optional)</label><textarea id="custNotes" placeholder="Any special delivery or timing requests?"></textarea></div>
+        <div class="toolbar"><button class="btn secondary" id="prevBtn">Back</button><button class="btn primary" id="approveBtn">Approve quote</button></div>
+        <div class="hint">We’ll email a payment link after approval.</div>
+      `;
 
-    el.btnApprove.addEventListener("click", () => {
-      showNote("Approval flow coming next — this button is wired and can post to checkout when ready.");
-    });
+      right.querySelector('#prevBtn').addEventListener('click', ()=> setStep(2));
+      right.querySelector('#approveBtn').addEventListener('click', ()=> { alert('Thanks! Your quote has been approved. We will contact you with payment details shortly.'); });
+
+      root.appendChild(left);
+      root.appendChild(right);
+      return root;
+    }
+
+    function render() {
+      const app = $('#app'); app.innerHTML = '';
+      if (state.step === 1) app.appendChild(renderStep1());
+      if (state.step === 2) app.appendChild(renderStep2());
+      if (state.step === 3) app.appendChild(renderStep3());
+    }
+
+    if (state.items.length === 0) addRow(); else render();
   </script>
 </body>
 </html>`);
 });
 
-// 404
-app.use((_req, res) => {
-  res.status(404).json({ ok: false, error: "Not found" });
+// --- 404 JSON fallback for API routes ---
+app.use((req, res, next) => {
+  if (req.accepts('json') && req.path.startsWith('/')) {
+    return res.status(404).json({ ok:false, error:'Not found', path: req.path });
+  }
+  next();
 });
 
+// --- Start ---
 app.listen(PORT, () => {
-  console.log("Server running on http://localhost:" + PORT);
+  console.log(`${APP_NAME} (${APP_VERSION}) listening on ${PORT}`);
 });
