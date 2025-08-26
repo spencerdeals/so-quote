@@ -1,7 +1,7 @@
-// SDL Instant Import — Hardened Wayfair/Amazon Extractor
+// SDL Instant Import — Wayfair/Amazon Hardened Extractor (with diagnostics)
 // Endpoints: /health, /extractProduct, /quote, /shopify/draft
 // Env required: SCRAPINGBEE_API_KEY
-// Optional: SCRAPINGBEE_PREMIUM=true (enables premium_proxy)
+// Optional: SCRAPINGBEE_PREMIUM=true (enable premium_proxy)
 // Optional: SHOPIFY_SHOP=yourstore.myshopify.com, SHOPIFY_ACCESS_TOKEN=shpat_xxx
 
 const express = require("express");
@@ -11,19 +11,29 @@ const { JSDOM } = require("jsdom");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// ---------- Middleware ----------
 app.use(cors());
 app.options("*", cors());
 app.use(express.json({ limit: "2mb" }));
 
-// ---------- Helpers ----------
+// ---------------- Utilities ----------------
 const U = {
   safeHost(u) { try { return new URL(u).hostname; } catch { return ""; } },
   parsePrice(s) { const n = parseFloat(String(s).replace(/[^\d.]/g, "")); return isFinite(n) ? n : 0; },
   pick(...vals) { for (const v of vals) if (v != null && String(v).trim() !== "") return v; return null; },
 };
 
-// ---------- ScrapingBee fetch ----------
+function looksLikeBotWall(html) {
+  const h = html.slice(0, 20000).toLowerCase();
+  return (
+    h.includes("are you a robot") ||
+    h.includes("access denied") ||
+    h.includes("attention required") ||
+    h.includes("/captcha") ||
+    h.includes("bot detection")
+  );
+}
+
+// ---------------- ScrapingBee fetch ----------------
 async function fetchWithBee(url) {
   const key = process.env.SCRAPINGBEE_API_KEY;
   if (!key) throw new Error("Missing SCRAPINGBEE_API_KEY");
@@ -32,8 +42,8 @@ async function fetchWithBee(url) {
   const isWayfair = /(^|\.)wayfair\./.test(host);
   const isAmazon  = /(^|\.)amazon\./.test(host);
 
-  // Force JS render + extended wait for dynamic sites
-  const wait = isWayfair || isAmazon ? 4500 : 2500;
+  // Heavier render path for Wayfair/Amazon
+  const wait = (isWayfair || isAmazon) ? 6000 : 2500;
 
   const qs = new URLSearchParams();
   qs.set("api_key", key);
@@ -41,9 +51,11 @@ async function fetchWithBee(url) {
   qs.set("country_code", "us");
   qs.set("render_js", "true");
   qs.set("wait", String(wait));
+  // use premium proxy when available
   if (String(process.env.SCRAPINGBEE_PREMIUM || "").toLowerCase() === "true") {
     qs.set("premium_proxy", "true");
   }
+  // realistic headers
   qs.set("custom_headers", JSON.stringify({
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9"
@@ -55,7 +67,7 @@ async function fetchWithBee(url) {
   return { html, host, wait, status: resp.status };
 }
 
-// ---------- Variant extractor ----------
+// ---------------- Variant extractor ----------------
 function extractVariants(document) {
   const out = [];
   const selects = Array.from(document.querySelectorAll("select"));
@@ -67,7 +79,7 @@ function extractVariants(document) {
       .filter(Boolean);
     if (options.length >= 2 && options.length <= 50) out.push({ name: nameGuess, options });
   }
-  // Amazon twister (best-effort, harmless for Wayfair)
+  // Amazon "twister" (harmless for Wayfair)
   const twister = document.querySelector("#twister, #variation_color_name, #variation_size_name");
   if (twister) {
     const labels = Array.from(twister.querySelectorAll("label, span.a-size-base"));
@@ -77,7 +89,7 @@ function extractVariants(document) {
   return out;
 }
 
-// ---------- Wayfair/Amazon aware extraction ----------
+// ---------------- Price/title/image extraction ----------------
 function extractFromHTML(html, url) {
   const dom = new JSDOM(html);
   const { document } = dom.window;
@@ -113,7 +125,7 @@ function extractFromHTML(html, url) {
     } catch {}
   }
 
-  // 2) Wayfair direct selector if present
+  // 2) Wayfair direct selector
   if (!price) {
     const wf = document.querySelector("[data-hbkit-price]");
     if (wf) {
@@ -122,7 +134,7 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 3) Embedded JSON state (NEXT_DATA / application/json)
+  // 3) Embedded JSON (NEXT_DATA / application/json)
   if (!price || !title || !image) {
     const blocks = [];
     const nextData = document.querySelector("#__NEXT_DATA__");
@@ -136,6 +148,7 @@ function extractFromHTML(html, url) {
         blocks.push(body);
       }
     }
+
     for (const body of blocks) {
       try {
         const obj = JSON.parse(body);
@@ -143,8 +156,10 @@ function extractFromHTML(html, url) {
         while (stack.length) {
           const cur = stack.pop();
           if (!cur || typeof cur !== "object") continue;
+
           if (!title) title = cur.title || cur.name || title;
           if (!image) image = cur.image || cur.imageUrl || cur.primaryImage || image;
+
           const keys = ["price", "priceAmount", "price_value", "currentPrice", "amount", "value"];
           for (const k of keys) {
             if (k in cur) {
@@ -152,6 +167,7 @@ function extractFromHTML(html, url) {
               if (p > 0) { price = p; if (source === "none") source = `json:${k}`; }
             }
           }
+
           if (Array.isArray(cur)) for (const v of cur) stack.push(v);
           else for (const v of Object.values(cur)) stack.push(v);
         }
@@ -160,14 +176,16 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 4) Generic DOM selectors (Amazon + generic)
+  // 4) Generic DOM selectors for price
   if (!price) {
     const sels = [
+      // Amazon
       "#corePriceDisplay_desktop_feature_div .a-offscreen",
       "#corePrice_feature_div .a-offscreen",
       "#price_inside_buybox",
       "#priceblock_ourprice",
       "#priceblock_dealprice",
+      // Generic
       "[itemprop=price]", 'meta[itemprop="price"]', 'meta[property="product:price:amount"]',
       ".price", ".sale-price", ".our-price", "[data-test*='price']", ".c-price"
     ];
@@ -182,11 +200,11 @@ function extractFromHTML(html, url) {
 
   // 5) Title/Image fallbacks
   if (!title) {
-    const og = document.querySelector('meta[property="og:title"]')?.getAttribute("content");
-    const h1 = document.querySelector("h1")?.textContent;
+    const og  = document.querySelector('meta[property="og:title"]')?.getAttribute("content");
+    const h1  = document.querySelector("h1")?.textContent;
     const amz = document.querySelector("#productTitle")?.textContent;
-    const ttag = document.querySelector("title")?.textContent;
-    title = (U.pick(amz, og, h1, ttag) || "").trim();
+    const t   = document.querySelector("title")?.textContent;
+    title = (U.pick(amz, og, h1, t) || "").trim();
   }
   if (!image) {
     const ogi = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
@@ -221,7 +239,7 @@ function extractFromHTML(html, url) {
   };
 }
 
-// ---------- Quote rules ----------
+// ---------------- Quote rules ----------------
 const DEFAULT_US_SALES_TAX = 0.06625;
 const DEFAULT_FREIGHT_PER_FT3 = 6.00;
 const CARD_FEE_RATE = 0.0325;
@@ -247,23 +265,35 @@ function roundTo95(n) {
   return Number((dollars + 0.95).toFixed(2));
 }
 
-// ---------- Routes ----------
+// ---------------- Routes ----------------
 app.get(["/", "/health"], (_req, res) => {
   res.json({ ok: true, version: "alpha-3-wayfair-hardened" });
 });
 
+// Extract product (diagnostic-friendly)
 app.post("/extractProduct", async (req, res) => {
   try {
     const { url } = req.body || {};
     if (!url) return res.status(400).json({ ok:false, error:"Missing url" });
+
     const fetched = await fetchWithBee(url);
+    const botWall = looksLikeBotWall(fetched.html);
     const product = extractFromHTML(fetched.html, url);
-    res.json({ ok:true, url, ...product, used: { host: fetched.host, wait: fetched.wait, status: fetched.status } });
+
+    res.json({
+      ok: true,
+      url,
+      ...product,
+      used: { host: fetched.host, wait: fetched.wait, status: fetched.status },
+      botWall: botWall ? true : false,
+      reason: botWall ? "Bot-wall detected by content fingerprint." : undefined
+    });
   } catch (e) {
     res.status(500).json({ ok:false, error:String(e.message || e) });
   }
 });
 
+// Quote calc (auto-scrape if firstCost missing)
 app.post("/quote", async (req, res) => {
   try {
     const body = req.body || {};
@@ -359,7 +389,7 @@ app.post("/quote", async (req, res) => {
   }
 });
 
-// ---------- Shopify draft ----------
+// Shopify draft order
 app.post("/shopify/draft", async (req, res) => {
   try {
     const shop = process.env.SHOPIFY_SHOP;
