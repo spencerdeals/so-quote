@@ -1,4 +1,4 @@
-// SDL Instant Import — "Instant Import 5 + WF Plus v2" (Aggressive JSON + broader selectors + longer wait)
+// SDL Instant Import — "Instant Import 5 + WF Plus v2 + CORS harden"
 // Endpoints: /health, /extractProduct, /quote, /shopify/draft
 // Scraper: render_js + long wait (no js_scenario)
 // Env required: SCRAPINGBEE_API_KEY
@@ -6,17 +6,27 @@
 // Optional: SHOPIFY_SHOP=yourstore.myshopify.com, SHOPIFY_ACCESS_TOKEN=shpat_xxx
 
 const express = require("express");
-const cors = require("cors");
 const { JSDOM } = require("jsdom");
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors());
-app.options("*", cors());
+/* ---------- CORS: answer ALL preflights ---------- */
+app.use((req, res, next) => {
+  // Allow your public frontend and any preview; use "*" since no cookies are sent
+  res.header("Access-Control-Allow-Origin", "*");
+  res.header("Vary", "Origin");
+  res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
+  res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
+  // short-circuit preflights
+  if (req.method === "OPTIONS") return res.sendStatus(204);
+  next();
+});
+
+/* ---------- JSON body ---------- */
 app.use(express.json({ limit: "2mb" }));
 
-// ---------- Utils ----------
+/* ---------- Utils ---------- */
 const U = {
   safeHost(u) { try { return new URL(u).hostname; } catch { return ""; } },
   parsePrice(s) { const n = parseFloat(String(s).replace(/[^\d.]/g, "")); return isFinite(n) ? n : 0; },
@@ -33,7 +43,7 @@ function looksLikeBotWall(html) {
   return h.includes("are you a robot") || h.includes("access denied") || h.includes("/captcha");
 }
 
-// ---------- ScrapingBee (render_js + long wait) ----------
+/* ---------- ScrapingBee (render_js + long wait) ---------- */
 async function beeGet(url, { apiKey, wait, premium, headers }) {
   const qs = new URLSearchParams();
   qs.set("api_key", apiKey);
@@ -60,7 +70,7 @@ async function fetchWithBee(url) {
   const isAmazon  = /(^|\.)amazon\./.test(host);
   const premium   = String(process.env.SCRAPINGBEE_PREMIUM || "").toLowerCase() === "true";
 
-  const wait = (isWayfair || isAmazon) ? 9000 : 4500; // longer hydration window
+  const wait = (isWayfair || isAmazon) ? 9000 : 4500;
   const headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
     "Accept-Language": "en-US,en;q=0.9"
@@ -68,13 +78,12 @@ async function fetchWithBee(url) {
 
   let r = await beeGet(url, { apiKey, wait, premium, headers });
   if (r.status >= 400 && r.status < 500) {
-    // one retry with extra wait
     r = await beeGet(url, { apiKey, wait: wait + 3000, premium, headers });
   }
   return { status: r.status, html: r.html, host, wait, premium };
 }
 
-// ---------- Variants ----------
+/* ---------- Variants ---------- */
 function extractVariants(document) {
   const out = [];
   const selects = Array.from(document.querySelectorAll("select"));
@@ -95,7 +104,7 @@ function extractVariants(document) {
   return out;
 }
 
-// ---------- Aggressive JSON miner ----------
+/* ---------- Aggressive JSON miner ---------- */
 function mineJsonAggressively(html, document) {
   const blocks = [];
   const nextData = document.querySelector("#__NEXT_DATA__");
@@ -133,7 +142,6 @@ function mineJsonAggressively(html, document) {
         for (const k of imageKeys) if (k in cur) pushImage(cur[k]);
         for (const k of priceKeys) if (k in cur) pushPrice(cur[k]);
 
-        // common nested shapes
         if (cur?.product?.title) pushTitle(cur.product.title);
         if (cur?.product?.name)  pushTitle(cur.product.name);
         if (cur?.product?.images?.[0]?.url) pushImage(cur.product.images[0].url);
@@ -154,7 +162,7 @@ function mineJsonAggressively(html, document) {
   return { title, image, price, counts: { titles: titleSet.size, images: imageSet.size, prices: priceSet.size } };
 }
 
-// ---------- Extraction pipeline ----------
+/* ---------- Extraction pipeline ---------- */
 function extractFromHTML(html, url) {
   const dom = new JSDOM(html);
   const { document } = dom.window;
@@ -200,7 +208,7 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 3) Aggressive JSON mining
+  // 3) Deep JSON mining
   if (!price || !title || !image) {
     const mined = mineJsonAggressively(html, document);
     signals.mined = mined.counts;
@@ -209,7 +217,7 @@ function extractFromHTML(html, url) {
     if (!price && mined.price > 0) { price = mined.price; source = source === "none" ? "json-miner" : source; }
   }
 
-  // 4) Generic DOM selectors (broadened)
+  // 4) Generic DOM selectors
   if (!price) {
     const sels = [
       "#corePriceDisplay_desktop_feature_div .a-offscreen",
@@ -273,7 +281,7 @@ function extractFromHTML(html, url) {
   };
 }
 
-// ---------- Quote rules ----------
+/* ---------- Quote rules ---------- */
 const DEFAULT_US_SALES_TAX = 0.06625;
 const DEFAULT_FREIGHT_PER_FT3 = 6.00;
 const CARD_FEE_RATE = 0.0325;
@@ -299,12 +307,11 @@ function roundTo95(n) {
   return Number((dollars + 0.95).toFixed(2));
 }
 
-// ---------- Routes ----------
+/* ---------- Routes ---------- */
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha-3-merged-wfplus-2" });
+  res.json({ ok: true, version: "alpha-3-merged-wfplus-2-cors" });
 });
 
-// Always return "whatever we can"
 app.post("/extractProduct", async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -400,15 +407,14 @@ app.post("/quote", async (req, res) => {
         retailTotal: Number(total.toFixed(2)),
         scraped: Boolean(it._product),
         scrapeOk: Boolean(it._scrapeOk),
-        scrapeError: it._scrapeError || null,
-        debug: it._product?.debug || null
+        scrapeError: it._scrapeError || null
       };
     });
 
     const grandTotal = lines.reduce((s, r) => s + r.retailTotal, 0);
     res.json({
       ok: true,
-      version: "alpha-3-merged-wfplus-2",
+      version: "alpha-3-merged-wfplus-2-cors",
       totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) },
       lines
     });
@@ -418,7 +424,6 @@ app.post("/quote", async (req, res) => {
   }
 });
 
-// Shopify draft
 app.post("/shopify/draft", async (req, res) => {
   try {
     const shop = process.env.SHOPIFY_SHOP;
@@ -467,3 +472,5 @@ app.post("/shopify/draft", async (req, res) => {
 app.listen(PORT, () => {
   console.log(`Backend running on :${PORT}`);
 });
+
+                           
