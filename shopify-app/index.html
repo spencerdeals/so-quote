@@ -1,0 +1,509 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SDL Import Quote Calculator</title>
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+    <style>
+      .card {
+        @apply bg-white rounded-lg shadow-md border border-gray-200 p-6;
+      }
+      .btn-primary {
+        @apply bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded-lg transition-colors duration-200 disabled:opacity-50 disabled:cursor-not-allowed;
+      }
+      .btn-secondary {
+        @apply bg-white hover:bg-gray-50 text-gray-700 font-medium py-2 px-4 rounded-lg border border-gray-300 transition-colors duration-200;
+      }
+      .input-field {
+        @apply block w-full rounded-lg border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 sm:text-sm p-3 border;
+      }
+    </style>
+  </head>
+  <body class="bg-gray-50">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useState } = React;
+
+      // Import Calculator Logic
+      const calculateImportCosts = (items) => {
+        const CUSTOMS_DUTY_RATE = 0.265;
+        const ENTRY_FEE_PER_ITEM = 8;
+        const CONTAINER_COST = 6000;
+        const CONTAINER_VOLUME_FT3 = 1165;
+        const DEFAULT_VOLUME_FT3 = 11.33;
+
+        let totalFirstCost = 0;
+        let totalVolume = 0;
+        let totalItems = items.length;
+
+        items.forEach(item => {
+          const itemCost = item.price * item.quantity;
+          totalFirstCost += itemCost;
+          const itemVolume = item.volume || DEFAULT_VOLUME_FT3;
+          totalVolume += itemVolume * item.quantity;
+        });
+
+        const customsCost = totalFirstCost * CUSTOMS_DUTY_RATE;
+        const entryFees = totalItems * ENTRY_FEE_PER_ITEM;
+        const containerUtilization = totalVolume / CONTAINER_VOLUME_FT3;
+        const deliveryCost = CONTAINER_COST * containerUtilization;
+
+        let totalShippingHandling = 0;
+        items.forEach(item => {
+          const itemValue = item.price * item.quantity;
+          const itemVolume = item.volume || DEFAULT_VOLUME_FT3;
+          
+          let marginRate = 0.4;
+          if (item.price > 5000) marginRate = 0.15;
+          else if (item.price > 3000) marginRate = 0.20;
+          else if (item.price > 1000) marginRate = 0.25;
+          else if (item.price > 500) marginRate = 0.30;
+
+          if (itemVolume > 50) marginRate = Math.min(marginRate, 0.20);
+          else if (itemVolume > 20) marginRate = Math.min(marginRate, 0.25);
+
+          const itemCustomsCost = itemValue * CUSTOMS_DUTY_RATE;
+          const itemDeliveryCost = deliveryCost * (itemVolume * item.quantity / totalVolume);
+          const itemEntryFee = ENTRY_FEE_PER_ITEM;
+          const itemLandedCost = itemValue + itemCustomsCost + itemDeliveryCost + itemEntryFee;
+          
+          totalShippingHandling += itemLandedCost * marginRate;
+        });
+
+        const breakdown = {
+          firstCost: totalFirstCost,
+          customsCost,
+          deliveryCost,
+          entryFees,
+          shippingHandling: totalShippingHandling,
+          total: totalFirstCost + customsCost + deliveryCost + entryFees + totalShippingHandling,
+        };
+
+        return {
+          items,
+          breakdown,
+          totalItems,
+          totalVolume,
+        };
+      };
+
+      const formatCurrency = (amount) => {
+        return new Intl.NumberFormat('en-US', {
+          style: 'currency',
+          currency: 'USD',
+        }).format(amount);
+      };
+
+      function App() {
+        const [currentStep, setCurrentStep] = useState('input');
+        const [urls, setUrls] = useState('');
+        const [products, setProducts] = useState([]);
+        const [verifiedProducts, setVerifiedProducts] = useState([]);
+        const [loading, setLoading] = useState(false);
+        const [error, setError] = useState(null);
+        const [calculation, setCalculation] = useState(null);
+
+        const extractProducts = async () => {
+          if (!urls.trim()) return;
+          
+          setLoading(true);
+          setError(null);
+          
+          const urlList = urls.split('\n').filter(url => url.trim());
+          const extractedProducts = [];
+          
+          for (const url of urlList) {
+            try {
+              const response = await fetch('https://so-quote-back-end-production.up.railway.app/extractProduct', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ url: url.trim() }),
+              });
+              
+              if (response.ok) {
+                const productData = await response.json();
+                extractedProducts.push({
+                  url: url.trim(),
+                  ...productData,
+                  quantity: 1,
+                  volume: 11.33,
+                });
+              } else {
+                extractedProducts.push({
+                  url: url.trim(),
+                  error: 'Failed to extract product data',
+                  title: 'Unknown Product',
+                  price: 0,
+                  image: '',
+                  quantity: 1,
+                  volume: 11.33,
+                });
+              }
+            } catch (error) {
+              extractedProducts.push({
+                url: url.trim(),
+                error: 'Network error',
+                title: 'Unknown Product',
+                price: 0,
+                image: '',
+                quantity: 1,
+                volume: 11.33,
+              });
+            }
+          }
+          
+          setProducts(extractedProducts);
+          setCurrentStep('review');
+          setLoading(false);
+        };
+
+        const updateProductQuantity = (index, quantity) => {
+          const updated = [...products];
+          updated[index].quantity = quantity;
+          setProducts(updated);
+        };
+
+        const removeProduct = (index) => {
+          const updated = products.filter((_, i) => i !== index);
+          setProducts(updated);
+        };
+
+        const updateVerifiedPrice = (index, price) => {
+          const updated = [...verifiedProducts];
+          updated[index].price = price;
+          setVerifiedProducts(updated);
+        };
+
+        const calculateFinalCosts = () => {
+          const importItems = verifiedProducts.map(p => ({
+            title: p.title,
+            price: p.price,
+            quantity: p.quantity,
+            volume: p.volume || 11.33,
+          }));
+          
+          const calc = calculateImportCosts(importItems);
+          setCalculation(calc);
+          setCurrentStep('breakdown');
+        };
+
+        // Step 1: URL Input
+        if (currentStep === 'input') {
+          return (
+            <div className="min-h-screen bg-gray-50 py-8">
+              <div className="max-w-4xl mx-auto px-4">
+                <div className="text-center mb-8">
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">SDL Import Quote Calculator</h1>
+                  <p className="text-lg text-gray-600">Step 1: Paste Product URLs</p>
+                </div>
+
+                <div className="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                  <div className="lg:col-span-2">
+                    <div className="card">
+                      <h2 className="text-xl font-semibold mb-4">Product URLs</h2>
+                      <p className="text-gray-600 mb-4">
+                        Paste product URLs from Wayfair, Amazon, or other retailers. One URL per line.
+                      </p>
+                      <textarea
+                        value={urls}
+                        onChange={(e) => setUrls(e.target.value)}
+                        className="input-field h-32 mb-4"
+                        placeholder={`https://www.wayfair.com/furniture/pdp/...
+https://www.amazon.com/dp/...
+https://www.overstock.com/...`}
+                      />
+                      <button
+                        onClick={extractProducts}
+                        disabled={loading || !urls.trim()}
+                        className="btn-primary w-full"
+                      >
+                        {loading ? 'Extracting Products...' : 'Extract Products'}
+                      </button>
+                      
+                      {error && (
+                        <div className="mt-4 p-3 bg-red-50 border border-red-200 rounded-lg text-red-700">
+                          {error}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="card">
+                      <h2 className="text-xl font-semibold mb-4">How it works</h2>
+                      <ol className="list-decimal list-inside space-y-2 text-sm text-gray-600 mb-4">
+                        <li>Paste product URLs</li>
+                        <li>Review extracted products</li>
+                        <li>Verify prices</li>
+                        <li>Get final cost breakdown</li>
+                      </ol>
+                      
+                      <p className="text-sm text-gray-600 mb-2">We'll calculate:</p>
+                      <ul className="list-disc list-inside space-y-1 text-sm text-gray-600">
+                        <li>First cost</li>
+                        <li>Customs cost (26.5%)</li>
+                        <li>Delivery to NJ</li>
+                        <li>Entry fees ($8/item)</li>
+                        <li>Shipping & handling</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Step 2: Review Products
+        if (currentStep === 'review') {
+          return (
+            <div className="min-h-screen bg-gray-50 py-8">
+              <div className="max-w-4xl mx-auto px-4">
+                <div className="text-center mb-8">
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">SDL Import Quote Calculator</h1>
+                  <p className="text-lg text-gray-600">Step 2: Review Products</p>
+                </div>
+
+                <div className="flex justify-between items-center mb-6">
+                  <button
+                    onClick={() => setCurrentStep('input')}
+                    className="btn-secondary"
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    onClick={() => {
+                      setVerifiedProducts(products);
+                      setCurrentStep('verify');
+                    }}
+                    className="btn-primary"
+                  >
+                    Continue to Price Verification →
+                  </button>
+                </div>
+
+                <div className="space-y-4">
+                  {products.map((product, index) => (
+                    <div key={index} className="card">
+                      <div className="flex items-start gap-4">
+                        {product.image && (
+                          <img
+                            src={product.image}
+                            alt={product.title}
+                            className="w-20 h-20 object-cover rounded-lg border border-gray-200"
+                            onError={(e) => e.target.style.display = 'none'}
+                          />
+                        )}
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-gray-900 mb-1">
+                            {product.title || 'Unknown Product'}
+                          </h3>
+                          <p className="text-gray-600 mb-2">
+                            Price: {formatCurrency(product.price || 0)}
+                          </p>
+                          {product.error && (
+                            <span className="inline-block px-2 py-1 bg-red-100 text-red-700 text-xs rounded">
+                              Error: {product.error}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div>
+                            <label className="block text-sm font-medium text-gray-700 mb-1">
+                              Quantity
+                            </label>
+                            <input
+                              type="number"
+                              value={product.quantity}
+                              onChange={(e) => updateProductQuantity(index, parseInt(e.target.value) || 1)}
+                              className="input-field w-20"
+                              min="1"
+                            />
+                          </div>
+                          <button
+                            onClick={() => removeProduct(index)}
+                            className="mt-6 px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+
+                  <div className="card bg-blue-50 border-blue-200">
+                    <div className="flex justify-between items-center">
+                      <span className="font-semibold">Total Items: {products.length}</span>
+                      <span className="font-semibold">
+                        Total Value: {formatCurrency(products.reduce((sum, p) => sum + (p.price * p.quantity), 0))}
+                      </span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Step 3: Price Verification
+        if (currentStep === 'verify') {
+          return (
+            <div className="min-h-screen bg-gray-50 py-8">
+              <div className="max-w-4xl mx-auto px-4">
+                <div className="text-center mb-8">
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">SDL Import Quote Calculator</h1>
+                  <p className="text-lg text-gray-600">Step 3: Verify Prices</p>
+                </div>
+
+                <div className="flex justify-between items-center mb-6">
+                  <button
+                    onClick={() => setCurrentStep('review')}
+                    className="btn-secondary"
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    onClick={calculateFinalCosts}
+                    className="btn-primary"
+                  >
+                    Calculate Final Costs →
+                  </button>
+                </div>
+
+                <div className="card mb-6">
+                  <h2 className="text-xl font-semibold mb-2">Double-Check Scraped Prices</h2>
+                  <p className="text-gray-600">
+                    Please verify these prices are correct before we calculate your final import costs.
+                    All items will be delivered to: <strong>6 Progress Street, Elizabeth, NJ 07201</strong>
+                  </p>
+                </div>
+
+                <div className="space-y-4">
+                  {verifiedProducts.map((product, index) => (
+                    <div key={index} className="card">
+                      <div className="flex items-start gap-4">
+                        {product.image && (
+                          <img
+                            src={product.image}
+                            alt={product.title}
+                            className="w-20 h-20 object-cover rounded-lg border border-gray-200"
+                            onError={(e) => e.target.style.display = 'none'}
+                          />
+                        )}
+                        <div className="flex-1">
+                          <h3 className="font-semibold text-gray-900 mb-1">{product.title}</h3>
+                          <p className="text-gray-600">Quantity: {product.quantity}</p>
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 mb-1">
+                            Price per item
+                          </label>
+                          <div className="relative">
+                            <span className="absolute left-3 top-3 text-gray-500">$</span>
+                            <input
+                              type="number"
+                              value={product.price}
+                              onChange={(e) => updateVerifiedPrice(index, parseFloat(e.target.value) || 0)}
+                              className="input-field pl-8 w-32"
+                              step="0.01"
+                            />
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Step 4: Final Breakdown
+        if (currentStep === 'breakdown' && calculation) {
+          return (
+            <div className="min-h-screen bg-gray-50 py-8">
+              <div className="max-w-4xl mx-auto px-4">
+                <div className="text-center mb-8">
+                  <h1 className="text-3xl font-bold text-gray-900 mb-2">SDL Import Quote Calculator</h1>
+                  <p className="text-lg text-gray-600">Step 4: Final Cost Breakdown</p>
+                </div>
+
+                <div className="flex justify-between items-center mb-6">
+                  <button
+                    onClick={() => setCurrentStep('verify')}
+                    className="btn-secondary"
+                  >
+                    ← Back
+                  </button>
+                  <button
+                    onClick={() => {
+                      setCurrentStep('input');
+                      setProducts([]);
+                      setVerifiedProducts([]);
+                      setUrls('');
+                      setCalculation(null);
+                    }}
+                    className="btn-primary"
+                  >
+                    Start Over
+                  </button>
+                </div>
+
+                <div className="card mb-6">
+                  <h2 className="text-2xl font-bold text-gray-900 mb-6">Import Cost Breakdown</h2>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 mb-6">
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <p className="text-sm text-gray-600">First Cost</p>
+                      <p className="text-2xl font-bold">{formatCurrency(calculation.breakdown.firstCost)}</p>
+                    </div>
+                    
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <p className="text-sm text-gray-600">Customs Cost (26.5%)</p>
+                      <p className="text-2xl font-bold">{formatCurrency(calculation.breakdown.customsCost)}</p>
+                    </div>
+                    
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <p className="text-sm text-gray-600">USA to NJ Delivery</p>
+                      <p className="text-2xl font-bold">{formatCurrency(calculation.breakdown.deliveryCost)}</p>
+                    </div>
+                    
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <p className="text-sm text-gray-600">Entry Fees ({calculation.totalItems} items)</p>
+                      <p className="text-2xl font-bold">{formatCurrency(calculation.breakdown.entryFees)}</p>
+                    </div>
+                    
+                    <div className="bg-gray-50 p-4 rounded-lg">
+                      <p className="text-sm text-gray-600">Shipping & Handling</p>
+                      <p className="text-2xl font-bold">{formatCurrency(calculation.breakdown.shippingHandling)}</p>
+                    </div>
+                  </div>
+                  
+                  <div className="bg-blue-50 border border-blue-200 p-6 rounded-lg">
+                    <div className="flex justify-between items-center mb-2">
+                      <h3 className="text-xl font-bold text-blue-900">Total Import Cost</h3>
+                      <p className="text-3xl font-bold text-blue-900">{formatCurrency(calculation.breakdown.total)}</p>
+                    </div>
+                    <p className="text-sm text-blue-700">
+                      Total Volume: {calculation.totalVolume.toFixed(2)} ft³ | 
+                      Container Utilization: {((calculation.totalVolume / 1165) * 100).toFixed(1)}%
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        return <div>Loading...</div>;
+      }
+
+      ReactDOM.render(<App />, document.getElementById('root'));
+    </script>
+  </body>
+</html>

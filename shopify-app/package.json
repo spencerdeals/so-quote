@@ -4,23 +4,8 @@
   "version": "1.0.0",
   "type": "module",
   "scripts": {
-    "build": "remix build",
-    "dev": "shopify app dev",
-    "config:link": "shopify app config link",
-    "config:push": "shopify app config push",
-    "config:use": "shopify app config use",
-    "deploy": "shopify app deploy",
-    "install": "shopify app install",
-    "uninstall": "shopify app uninstall",
-    "env": "shopify app env",
-    "log": "shopify app logs",
-    "open": "shopify app open",
-    "serve": "remix-serve build/index.js",
-    "setup": "prisma generate && prisma migrate deploy",
-    "lint": "eslint --cache --cache-location ./node_modules/.cache/eslint .",
-    "shopify": "shopify",
-    "typecheck": "tsc --noEmit",
-    "vite:build": "vite build"
+    "start": "node server.js",
+    "dev": "node server.js"
   },
   "dependencies": {
     "@prisma/client": "^5.0.0",
