@@ -1,4 +1,4 @@
-// SDL Instant Import — Wayfair/Amazon Hardened Extractor (with diagnostics)
+// SDL Instant Import — Wayfair/Amazon Extractor (cookie click + waitFor)
 // Endpoints: /health, /extractProduct, /quote, /shopify/draft
 // Env required: SCRAPINGBEE_API_KEY
 // Optional: SCRAPINGBEE_PREMIUM=true (enable premium_proxy)
@@ -23,7 +23,7 @@ const U = {
 };
 
 function looksLikeBotWall(html) {
-  const h = html.slice(0, 20000).toLowerCase();
+  const h = html.slice(0, 25000).toLowerCase();
   return (
     h.includes("are you a robot") ||
     h.includes("access denied") ||
@@ -42,8 +42,29 @@ async function fetchWithBee(url) {
   const isWayfair = /(^|\.)wayfair\./.test(host);
   const isAmazon  = /(^|\.)amazon\./.test(host);
 
-  // Heavier render path for Wayfair/Amazon
+  // Heavier path for dynamic sites
   const wait = (isWayfair || isAmazon) ? 6000 : 2500;
+
+  // For Wayfair: click cookie banner and wait for price block or JSON to appear
+  let jsScenario = null;
+  let waitFor = null;
+  if (isWayfair) {
+    jsScenario = [
+      { name: "wait",   args: { wait: 800 } },
+      { name: "click",  args: { selector: "#onetrust-accept-btn-handler", wait_for: 600 } },
+      { name: "scroll", args: { x: 0, y: 800 } },
+      { name: "wait",   args: { wait: 1200 } }
+    ];
+    waitFor = '[data-hbkit-price],#__NEXT_DATA__,script[type="application/ld+json"]';
+  } else if (isAmazon) {
+    // Gentle nudge on Amazon pages too
+    jsScenario = [
+      { name: "wait",   args: { wait: 600 } },
+      { name: "scroll", args: { x: 0, y: 600 } },
+      { name: "wait",   args: { wait: 800 } }
+    ];
+    waitFor = '#corePriceDisplay_desktop_feature_div .a-offscreen, #priceblock_ourprice, #price_inside_buybox, script[type="application/ld+json"]';
+  }
 
   const qs = new URLSearchParams();
   qs.set("api_key", key);
@@ -51,11 +72,12 @@ async function fetchWithBee(url) {
   qs.set("country_code", "us");
   qs.set("render_js", "true");
   qs.set("wait", String(wait));
-  // use premium proxy when available
+  if (waitFor) qs.set("wait_for", waitFor);
+  if (jsScenario) qs.set("js_scenario", JSON.stringify(jsScenario));
   if (String(process.env.SCRAPINGBEE_PREMIUM || "").toLowerCase() === "true") {
     qs.set("premium_proxy", "true");
   }
-  // realistic headers
+  // Realistic headers
   qs.set("custom_headers", JSON.stringify({
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9"
@@ -64,7 +86,7 @@ async function fetchWithBee(url) {
   const api = `https://app.scrapingbee.com/api/v1?${qs.toString()}`;
   const resp = await fetch(api);
   const html = await resp.text();
-  return { html, host, wait, status: resp.status };
+  return { html, host, wait, status: resp.status, waitFor, jsScenarioActive: !!jsScenario };
 }
 
 // ---------------- Variant extractor ----------------
@@ -79,7 +101,7 @@ function extractVariants(document) {
       .filter(Boolean);
     if (options.length >= 2 && options.length <= 50) out.push({ name: nameGuess, options });
   }
-  // Amazon "twister" (harmless for Wayfair)
+  // Amazon "twister" (harmless elsewhere)
   const twister = document.querySelector("#twister, #variation_color_name, #variation_size_name");
   if (twister) {
     const labels = Array.from(twister.querySelectorAll("label, span.a-size-base"));
@@ -125,7 +147,7 @@ function extractFromHTML(html, url) {
     } catch {}
   }
 
-  // 2) Wayfair direct selector
+  // 2) Wayfair direct price selector
   if (!price) {
     const wf = document.querySelector("[data-hbkit-price]");
     if (wf) {
@@ -148,7 +170,6 @@ function extractFromHTML(html, url) {
         blocks.push(body);
       }
     }
-
     for (const body of blocks) {
       try {
         const obj = JSON.parse(body);
@@ -176,17 +197,17 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 4) Generic DOM selectors for price
+  // 4) Generic DOM price selectors
   if (!price) {
     const sels = [
-      // Amazon
       "#corePriceDisplay_desktop_feature_div .a-offscreen",
       "#corePrice_feature_div .a-offscreen",
       "#price_inside_buybox",
       "#priceblock_ourprice",
       "#priceblock_dealprice",
-      // Generic
-      "[itemprop=price]", 'meta[itemprop="price"]', 'meta[property="product:price:amount"]',
+      "[itemprop=price]",
+      'meta[itemprop="price"]',
+      'meta[property="product:price:amount"]',
       ".price", ".sale-price", ".our-price", "[data-test*='price']", ".c-price"
     ];
     for (const sel of sels) {
@@ -207,11 +228,11 @@ function extractFromHTML(html, url) {
     title = (U.pick(amz, og, h1, t) || "").trim();
   }
   if (!image) {
-    const ogi = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
-    const linki = document.querySelector('link[rel="image_src"]')?.getAttribute("href");
+    const ogi  = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
+    const link = document.querySelector('link[rel="image_src"]')?.getAttribute("href");
     const amzi = document.querySelector("#landingImage")?.getAttribute("data-old-hires")
                || document.querySelector("#imgTagWrapperId img")?.getAttribute("src");
-    image = U.pick(ogi, linki, amzi);
+    image = U.pick(ogi, link, amzi);
   }
 
   // 6) Last-resort price sweep
@@ -267,33 +288,28 @@ function roundTo95(n) {
 
 // ---------------- Routes ----------------
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha-3-wayfair-hardened" });
+  res.json({ ok: true, version: "alpha-3-wayfair-click" });
 });
 
-// Extract product (diagnostic-friendly)
 app.post("/extractProduct", async (req, res) => {
   try {
     const { url } = req.body || {};
     if (!url) return res.status(400).json({ ok:false, error:"Missing url" });
-
     const fetched = await fetchWithBee(url);
     const botWall = looksLikeBotWall(fetched.html);
     const product = extractFromHTML(fetched.html, url);
-
     res.json({
       ok: true,
       url,
       ...product,
-      used: { host: fetched.host, wait: fetched.wait, status: fetched.status },
-      botWall: botWall ? true : false,
-      reason: botWall ? "Bot-wall detected by content fingerprint." : undefined
+      used: { host: fetched.host, wait: fetched.wait, status: fetched.status, waitFor: fetched.waitFor || null, jsScenarioActive: fetched.jsScenarioActive || false },
+      botWall: botWall || undefined
     });
   } catch (e) {
     res.status(500).json({ ok:false, error:String(e.message || e) });
   }
 });
 
-// Quote calc (auto-scrape if firstCost missing)
 app.post("/quote", async (req, res) => {
   try {
     const body = req.body || {};
@@ -339,6 +355,7 @@ app.post("/quote", async (req, res) => {
       const qty = Number(it.qty) || 1;
       const firstCost = Math.max(0, Number(it.firstCost) || 0);
       const volumeFt3 = isFinite(it.volumeFt3) ? Number(it.volumeFt3) : DEFAULT_VOLUME_FT3;
+
       const category = (it.category || "").toLowerCase();
       const dutyRate = isFinite(it.dutyRate) ? Number(it.dutyRate) :
         (category.includes("upholster") ? DEFAULT_DUTY_UPHOLSTERED : 0.0);
@@ -379,7 +396,7 @@ app.post("/quote", async (req, res) => {
 
     res.json({
       ok: true,
-      version: "alpha-3-wayfair-hardened",
+      version: "alpha-3-wayfair-click",
       totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) },
       lines
     });
