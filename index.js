@@ -21,7 +21,6 @@ const U = {
   safeHost(u) { try { return new URL(u).hostname; } catch { return ""; } },
   parsePrice(s) { const n = parseFloat(String(s).replace(/[^\d.]/g, "")); return isFinite(n) ? n : 0; },
   pick(...vals) { for (const v of vals) if (v != null && String(v).trim() !== "") return v; return null; },
-  // last-resort title derived from URL slug
   slugTitle(u) {
     try {
       const seg = (new URL(u).pathname || "").split("/").filter(Boolean).pop() || "";
@@ -42,7 +41,7 @@ function looksLikeBotWall(html) {
   );
 }
 
-// ---------- ScrapingBee: render_js + long wait (no js_scenario) ----------
+// ---------- ScrapingBee: render_js + long wait ----------
 async function beeGet(url, { apiKey, wait, premium, headers }) {
   const qs = new URLSearchParams();
   qs.set("api_key", apiKey);
@@ -95,7 +94,6 @@ function extractVariants(document) {
       .filter(Boolean);
     if (options.length >= 2 && options.length <= 50) out.push({ name: nameGuess, options });
   }
-  // Amazon "twister" (harmless elsewhere)
   const twister = document.querySelector("#twister, #variation_color_name, #variation_size_name");
   if (twister) {
     const labels = Array.from(twister.querySelectorAll("label, span.a-size-base"));
@@ -105,7 +103,7 @@ function extractVariants(document) {
   return out;
 }
 
-// ---------- Aggressive JSON miner (deep scan for WF/Amazon) ----------
+// ---------- Aggressive JSON miner ----------
 function mineJsonAggressively(html, document) {
   const blocks = [];
   const nextData = document.querySelector("#__NEXT_DATA__");
@@ -122,8 +120,8 @@ function mineJsonAggressively(html, document) {
   const imageSet = new Set();
   const priceSet = new Set();
 
-  function pushTitle(v) { if (!v) return; const s = String(v).trim(); if (s) titleSet.add(s); }
-  function pushImage(v) { if (!v) return; const s = String(v).trim(); if (/^https?:\/\//i.test(s)) imageSet.add(s); }
+  function pushTitle(v) { if (!v) return; const s=String(v).trim(); if (s) titleSet.add(s); }
+  function pushImage(v) { if (!v) return; const s=String(v).trim(); if (/^https?:\/\//i.test(s)) imageSet.add(s); }
   function pushPrice(v) { const n = U.parsePrice(v); if (n > 0) priceSet.add(n); }
 
   const titleKeys = ["title","name","productTitle","seoTitle"];
