@@ -1,5 +1,5 @@
 // SDL Instant Import — FINAL build (CORS + Deep Extractor + Fallbacks)
-// Version: alpha-3-final
+// Version: alpha-3-final-2
 // Endpoints: /health, /extractProduct, /quote, /shopify/draft
 // Env required: SCRAPINGBEE_API_KEY
 // Optional: SCRAPINGBEE_PREMIUM=true
@@ -189,7 +189,7 @@ function extractFromHTML(html, url) {
   }
   for (var b = 0; b < blocks.length; b++) { try { scanObj(JSON.parse(blocks[b])); } catch (e) {} if (title && (image || price)) break; }
 
-  // 4) Scan ALL <script> text for `"price":` style hints (non-JSON)
+  // 4) Scan ALL <script> text for `"price": ...`
   if (!price) {
     var scripts = Array.from(document.querySelectorAll("script")).map(function (s) { return s.textContent || ""; }).join("\n");
     var priceJsonRegex = /"price"\s*:\s*"?(\d{1,3}(?:,\d{3})*|\d+)(?:\.(\d{2}))?"?/gi;
@@ -222,7 +222,15 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 6) OG/Twitter/meta for title/image
+  // 6) HERO <img> FALLBACK (added)
+  if (!image) {
+    var hero = document.querySelector('img[alt*="sofa"], img[alt*="product"], img[src*="w003073104"], img[srcset]');
+    if (hero) {
+      image = hero.getAttribute("src") || ((hero.getAttribute("srcset") || "").split(" ")[0]) || image;
+    }
+  }
+
+  // 7) OG/Twitter/meta for title/image
   if (!title) {
     var og  = document.querySelector('meta[property="og:title"]');
     var twt = document.querySelector('meta[name="twitter:title"]');
@@ -241,7 +249,14 @@ function extractFromHTML(html, url) {
       (amzi && amzi.getAttribute("data-old-hires")) || (img2 && img2.getAttribute("src")));
   }
 
-  // 7) Final price regex
+  // 8) VISIBLE PRICE TEXT FALLBACK (added)
+  if (!price) {
+    var allTexts = Array.from(document.querySelectorAll("span,div")).map(function (el) { return (el.textContent || "").trim(); });
+    var vis = allTexts.find(function (t) { return /^\$\s*\d/.test(t); });
+    if (vis) price = parsePrice(vis);
+  }
+
+  // 9) Final price regex on raw HTML
   if (!price) {
     var rx = /(USD\s*)?\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|[0-9]+(?:\.[0-9]{2}))/gi;
     var best = null, mm;
@@ -293,7 +308,7 @@ function roundTo95(n) {
 
 /* --------------------- Routes --------------------- */
 app.get(["/", "/health"], function (_req, res) {
-  res.json({ ok: true, version: "alpha-3-final" });
+  res.json({ ok: true, version: "alpha-3-final-2" });
 });
 
 app.post("/extractProduct", async function (req, res) {
@@ -376,7 +391,7 @@ app.post("/quote", async function (req, res) {
     });
 
     var grandTotal = lines.reduce(function (s, r) { return s + r.retailTotal; }, 0);
-    res.json({ ok: true, version: "alpha-3-final", totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) }, lines: lines });
+    res.json({ ok: true, version: "alpha-3-final-2", totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) }, lines: lines });
   } catch (e) {
     res.status(500).json({ ok: false, error: "Server error." });
   }
@@ -398,7 +413,6 @@ app.post("/shopify/draft", async function (req, res) {
       if (it.image) props.push({ name: "Image", value: it.image });
       if (it.vendor) props.push({ name: "Vendor", value: it.vendor });
       if (Array.isArray(it.variantSelections)) it.variantSelections.forEach(function (v) { props.push({ name: v.name, value: v.value }); });
-
       return { title: it.name || "Special Order — Customer Provided Link", quantity: Number(it.qty) || 1, price: Number(it.unitPrice) || undefined, properties: props };
     });
 
