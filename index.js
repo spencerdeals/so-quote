@@ -1,153 +1,112 @@
-// Instant Quote Backend — #alpha landed cost patch (flat 25% duty, CommonJS)
-// Full paste-and-replace file for index.js (CommonJS to avoid ESM issues)
-// Version: alpha-landed-3-cjs (2025-08-23)
+// #alpha build — version 3
+// Express backend with /health and /quote using SDL rules
 
 const express = require("express");
 const cors = require("cors");
 
 const app = express();
+const PORT = process.env.PORT || 3000;
+
+// --- Middleware
 app.use(cors());
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "1mb" }));
 
-// ---------- Config (hidden defaults for customer-facing UI) ----------
-// Freight assumption: consolidated 20' container @ $6,000, ~75% full ⇒ ~$6.00/ft³ (hidden)
-const DEFAULT_FREIGHT_RATE_PER_FT3 = 6.0;
-
-// Default carton volume when unknown (ft³)
+// --- Constants
+const DEFAULT_US_SALES_TAX = 0.06625;
+const DEFAULT_FREIGHT_PER_FT3 = 6.00;
+const CARD_FEE_RATE = 0.0325;
+const DEFAULT_DUTY_UPHOLSTERED = 0.25;
 const DEFAULT_VOLUME_FT3 = 11.33;
+const FIXED_FEES_PER_SHIPMENT = 0;
 
-// US sales tax when vendors ship to FFF NJ warehouse
-const DEFAULT_US_SALES_TAX_RATE = 0.06625; // 6.625%
-
-// Flat import duty (25% for all items)
-const FLAT_DUTY_RATE = 0.25;
-
-// Round retail to *.95 endings (helper)
-function roundRetail95(n) {
-  const rounded = Math.round(n * 100) / 100;
-  const floor = Math.floor(rounded);
-  const cents = rounded - floor;
-  if (cents <= 0.95) return floor + 0.95;
-  return floor + 1 + 0.95;
+// Margin tiers
+function marginByVolume(totalFt3) {
+  if (totalFt3 < 10) return 0.40;
+  if (totalFt3 < 20) return 0.30;
+  if (totalFt3 < 50) return 0.25;
+  return 0.20;
 }
 
-// Core landed cost calculator
-function computeLanded({
-  firstCost,
-  qty = 1,
-  volumeFt3,
-  category = "other",
-  freightRatePerFt3 = DEFAULT_FREIGHT_RATE_PER_FT3,
-  applyUsSalesTax = true,
-  usSalesTaxRate = DEFAULT_US_SALES_TAX_RATE,
-}) {
-  const v = typeof volumeFt3 === "number" && volumeFt3 > 0 ? volumeFt3 : DEFAULT_VOLUME_FT3;
-  const unitTax = applyUsSalesTax ? firstCost * usSalesTaxRate : 0;
-  const unitFreight = freightRatePerFt3 * v;
-  const unitDuty = firstCost * FLAT_DUTY_RATE; // always 25%
-  const landedUnit = firstCost + unitTax + unitFreight + unitDuty;
-  const landedTotal = landedUnit * qty;
-
-  // Customer-facing retail (import margin SDL)
-  const totalFt3 = v * qty;
-  let marginPct = 0.4;
-  if (totalFt3 >= 50) marginPct = 0.2;
-  else if (totalFt3 >= 20) marginPct = 0.25;
-  else if (totalFt3 >= 10) marginPct = 0.30;
-
-  if (landedUnit > 5000) marginPct = Math.min(marginPct, 0.15);
-  else if (landedUnit > 3000) marginPct = Math.min(marginPct, 0.20);
-  else if (landedUnit > 1000) marginPct = Math.min(marginPct, 0.25);
-
-  const retailUnitRaw = landedUnit * (1 + marginPct);
-  const cardFeePct = 0.0325;
-  const retailUnitWithFee = retailUnitRaw * (1 + cardFeePct);
-  const retailUnit = roundRetail95(retailUnitWithFee);
-  const retailTotal = retailUnit * qty;
-
-  return {
-    inputs: { firstCost, qty, volumeFt3: v, category, freightRatePerFt3, applyUsSalesTax, usSalesTaxRate, dutyRate: FLAT_DUTY_RATE },
-    breakdown: {
-      unit: {
-        firstCost,
-        usSalesTax: unitTax,
-        freight: unitFreight,
-        duty: unitDuty,
-        landed: landedUnit,
-      },
-      total: {
-        landed: landedTotal,
-      },
-    },
-    customer: {
-      unit: retailUnit,
-      total: retailTotal,
-    },
-  };
+// Value caps
+function capByLanded(landed) {
+  if (landed > 5000) return 0.15;
+  if (landed > 3000) return 0.20;
+  if (landed > 1000) return 0.25;
+  return 1.0;
 }
 
+// Round retail to *.95 endings
+function roundTo95(n) {
+  const rounded = Math.round(n / 0.05) * 0.05;
+  const dollars = Math.floor(rounded);
+  return dollars + 0.95;
+}
+
+// Health check
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha-landed-3-cjs", calc: "landed+retail-flat25" });
+  res.json({ ok: true, version: "alpha-3", calc: "landed+retail-dynamic(SDL)" });
 });
 
+// Quote endpoint
 app.post("/quote", (req, res) => {
   try {
     const body = req.body || {};
-    const items = Array.isArray(body.items) ? body.items : (body.item ? [body.item] : []);
-
+    const items = Array.isArray(body.items) ? body.items : [];
     if (!items.length) {
-      return res.status(400).json({ ok: false, error: "No items provided. Expect body.items[]." });
+      return res.status(400).json({ ok: false, error: "No items provided." });
     }
 
-    const results = items.map((it, idx) => {
-      const firstCost = Number(it.firstCost);
-      const qty = Number.isFinite(Number(it.qty)) ? Number(it.qty) : 1;
-      if (!Number.isFinite(firstCost) || firstCost <= 0) {
-        return { index: idx, error: "Invalid firstCost" };
-      }
-      return { index: idx, ...computeLanded({ ...it, firstCost, qty }) };
-    });
+    const freightPerFt3 = isFinite(body.freightPerFt3) ? Number(body.freightPerFt3) : DEFAULT_FREIGHT_PER_FT3;
+    const fixedFeesPerShipment = isFinite(body.fixedFeesPerShipment) ? Number(body.fixedFeesPerShipment) : FIXED_FEES_PER_SHIPMENT;
 
-    const orderRetailTotal = results.reduce((sum, r) => sum + (r.customer?.total || 0), 0);
-    const orderLandedTotal = results.reduce((sum, r) => sum + (r.breakdown?.total?.landed || 0), 0);
+    const totalFt3 = items.reduce((sum, it) => {
+      const qty = Number(it.qty) || 1;
+      const v = isFinite(it.volumeFt3) ? Number(it.volumeFt3) : DEFAULT_VOLUME_FT3;
+      return sum + v * qty;
+    }, 0);
 
-    res.json({
-      ok: true,
-      version: "alpha-landed-3-cjs",
-      defaults: {
-        freightRatePerFt3: DEFAULT_FREIGHT_RATE_PER_FT3,
-        defaultVolumeFt3: DEFAULT_VOLUME_FT3,
-        usSalesTaxRate: DEFAULT_US_SALES_TAX_RATE,
-        dutyRate: FLAT_DUTY_RATE,
-      },
-      results,
-      totals: {
-        landed: orderLandedTotal,
-        customer: orderRetailTotal,
-      },
-    });
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: "Server error" });
-  }
-});
+    const volTierMargin = marginByVolume(totalFt3);
+    const totalQty = items.reduce((s, it) => s + (Number(it.qty) || 1), 0);
+    const perUnitFixedFee = totalQty > 0 ? (fixedFeesPerShipment / totalQty) : 0;
 
-app.get("/quote", (req, res) => {
-  const q = req.query;
-  const firstCost = Number(q.firstCost);
-  const qty = Number.isFinite(Number(q.qty)) ? Number(q.qty) : 1;
-  if (!Number.isFinite(firstCost) || firstCost <= 0) {
-    return res.status(400).json({ ok: false, error: "Provide firstCost as a number." });
-  }
-  const volumeFt3 = q.volumeFt3 !== undefined ? Number(q.volumeFt3) : undefined;
-  const category = q.category || "other";
-  const freightRatePerFt3 = q.freightRatePerFt3 !== undefined ? Number(q.freightRatePerFt3) : undefined;
-  const applyUsSalesTax = q.applyUsSalesTax !== undefined ? q.applyUsSalesTax === "true" || q.applyUsSalesTax === true : true;
-  const result = computeLanded({ firstCost, qty, volumeFt3, category, freightRatePerFt3, applyUsSalesTax });
-  res.json({ ok: true, version: "alpha-landed-3-cjs", results: [ { index: 0, ...result } ], totals: { landed: result.breakdown.total.landed, customer: result.customer.total } });
-});
+    const lineResults = items.map((it) => {
+      const name = it.name || "Item";
+      const qty = Number(it.qty) || 1;
+      const firstCost = Math.max(0, Number(it.firstCost) || 0);
+      const volumeFt3 = isFinite(it.volumeFt3) ? Number(it.volumeFt3) : DEFAULT_VOLUME_FT3;
+      const category = (it.category || "").toLowerCase();
+      const dutyRate = isFinite(it.dutyRate) ? Number(it.dutyRate) :
+        (category.includes("upholster") ? DEFAULT_DUTY_UPHOLSTERED : 0.0);
+      const taxExempt = Boolean(it.taxExempt);
 
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Server running on http://0.0.0.0:${PORT}`);
-});
+      const usTax = taxExempt ? 0 : firstCost * DEFAULT_US_SALES_TAX;
+      const freight = volumeFt3 * freightPerFt3;
+      const fixedFee = perUnitFixedFee;
+      const duty = firstCost * dutyRate;
+
+      const landedPerUnit = firstCost + usTax + freight + fixedFee + duty;
+
+      const cap = capByLanded(landedPerUnit);
+      const marginRate = Math.min(volTierMargin, cap);
+
+      const retailPreCard = landedPerUnit * (1 + marginRate);
+      const retailWithCard = retailPreCard * (1 + CARD_FEE_RATE);
+      const retail = roundTo95(retailWithCard);
+      const total = retail * qty;
+
+      return {
+        name,
+        qty,
+        firstCost,
+        volumeFt3,
+        category,
+        dutyRate,
+        taxExempt,
+        breakdown: {
+          usTax: Number(usTax.toFixed(2)),
+          freight: Number(freight.toFixed(2)),
+          fixedFee: Number(fixedFee.toFixed(2)),
+          duty: Number(duty.toFixed(2)),
+          landedPerUnit: Number(landedPerUnit.toFixed(2)),
+          marginRate,
+          cardFeeRat
