@@ -1,0 +1,30 @@
+# This file stores information about your app
+
+# Learn more about configuring your app at https://shopify.dev/docs/apps/tools/cli/configuration
+
+name = "SDL Import Quote"
+client_id = "your_client_id_here"
+application_url = "https://your-app-url.ngrok.io"
+embedded = true
+
+[access_scopes]
+# Learn more at https://shopify.dev/docs/apps/tools/cli/configuration#access_scopes
+scopes = "write_products,read_products"
+
+[auth]
+redirect_urls = [
+  "https://your-app-url.ngrok.io/auth/callback",
+  "https://your-app-url.ngrok.io/auth/shopify/callback",
+  "https://your-app-url.ngrok.io/api/auth/callback"
+]
+
+[webhooks]
+api_version = "2023-10"
+
+[pos]
+embedded = false
+
+[build]
+automatically_update_urls_on_dev = true
+dev_store_url = "your-dev-store.myshopify.com"
+include_config_on_deploy = true
