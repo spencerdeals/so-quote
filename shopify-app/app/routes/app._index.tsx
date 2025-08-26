@@ -1,7 +1,7 @@
 import { useState } from "react";
 import type { ActionFunctionArgs, LoaderFunctionArgs } from "@remix-run/node";
 import { json } from "@remix-run/node";
-import { useActionData, useSubmit, useNavigation } from "@remix-run/react";
+import { useActionData, useSubmit, useNavigation, useLoaderData } from "@remix-run/react";
 import {
   Page,
   Layout,
@@ -13,8 +13,13 @@ import {
   Text,
   BlockStack,
   InlineStack,
+  DataTable,
+  Thumbnail,
+  Badge,
+  Select,
 } from "@shopify/polaris";
 import { authenticate } from "../shopify.server";
+import { calculateImportCosts, type ImportItem } from "../lib/import-calculator";
 
 export const loader = async ({ request }: LoaderFunctionArgs) => {
   await authenticate.admin(request);
@@ -26,11 +31,34 @@ export const action = async ({ request }: ActionFunctionArgs) => {
   
   const formData = await request.formData();
   const urls = formData.get("urls") as string;
+  const action = formData.get("action") as string;
+  const productsData = formData.get("productsData") as string;
   
-  if (!urls) {
+  if (action === "extract" && !urls) {
     return json({ error: "Please provide product URLs" }, { status: 400 });
   }
 
+  if (action === "calculate" && productsData) {
+    try {
+      const products = JSON.parse(productsData);
+      const importItems: ImportItem[] = products.map((p: any) => ({
+        title: p.title,
+        price: p.price,
+        quantity: p.quantity || 1,
+        volume: p.volume || 11.33, // default volume
+      }));
+      
+      const calculation = calculateImportCosts(importItems);
+      
+      return json({
+        success: true,
+        calculation,
+        step: 'breakdown'
+      });
+    } catch (error) {
+      return json({ error: "Failed to calculate costs" }, { status: 500 });
+    }
+  }
   try {
     // Split URLs and extract products
     const urlList = urls.split('\n').filter(url => url.trim());
@@ -53,6 +81,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             url: url.trim(),
             ...productData,
             quantity: 1, // default quantity
+            volume: 11.33, // default volume in ft³
           });
         } else {
           extractedProducts.push({
@@ -62,6 +91,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
             price: 0,
             image: '',
             quantity: 1,
+            volume: 11.33,
           });
         }
       } catch (error) {
@@ -72,6 +102,7 @@ export const action = async ({ request }: ActionFunctionArgs) => {
           price: 0,
           image: '',
           quantity: 1,
+          volume: 11.33,
         });
       }
     }
@@ -93,19 +124,49 @@ export default function Index() {
   const navigation = useNavigation();
   const [urls, setUrls] = useState("");
   const [currentStep, setCurrentStep] = useState<'input' | 'review' | 'verify' | 'breakdown'>('input');
+  const [products, setProducts] = useState<any[]>([]);
+  const [verifiedProducts, setVerifiedProducts] = useState<any[]>([]);
 
   const isLoading = navigation.state === "submitting";
 
   const handleSubmit = () => {
-    submit({ urls }, { method: "post" });
+    submit({ urls, action: "extract" }, { method: "post" });
   };
 
-  const handleNextStep = () => {
-    if (currentStep === 'input' && actionData?.success) {
+  const handleNextStep = (step?: string) => {
+    if (step) {
+      setCurrentStep(step as any);
+    } else if (currentStep === 'input' && actionData?.success) {
       setCurrentStep('review');
+      setProducts(actionData.products || []);
+    } else if (currentStep === 'review') {
+      setCurrentStep('verify');
+      setVerifiedProducts(products);
+    } else if (currentStep === 'verify') {
+      // Calculate final costs
+      submit({ 
+        action: "calculate", 
+        productsData: JSON.stringify(verifiedProducts) 
+      }, { method: "post" });
     }
   };
 
+  const updateProductQuantity = (index: number, quantity: number) => {
+    const updated = [...products];
+    updated[index].quantity = quantity;
+    setProducts(updated);
+  };
+
+  const removeProduct = (index: number) => {
+    const updated = products.filter((_, i) => i !== index);
+    setProducts(updated);
+  };
+
+  const updateVerifiedPrice = (index: number, price: number) => {
+    const updated = [...verifiedProducts];
+    updated[index].price = price;
+    setVerifiedProducts(updated);
+  };
   // Step 1: URL Input Page
   if (currentStep === 'input') {
     return (
@@ -150,7 +211,7 @@ https://www.overstock.com/...`}
                 {actionData?.success && (
                   <Banner status="success" onDismiss={() => {}}>
                     <p>Successfully extracted {actionData.products?.length} products!</p>
-                    <Button onClick={handleNextStep} variant="primary">
+                    <Button onClick={() => handleNextStep()} variant="primary">
                       Review Products →
                     </Button>
                   </Banner>
@@ -196,10 +257,10 @@ https://www.overstock.com/...`}
       <Page
         title="SDL Instant Import Quote"
         subtitle="Step 2: Review Products"
-        backAction={{ onAction: () => setCurrentStep('input') }}
+        backAction={{ onAction: () => handleNextStep('input') }}
         primaryAction={{
           content: "Continue to Price Verification →",
-          onAction: () => setCurrentStep('verify'),
+          onAction: () => handleNextStep(),
         }}
       >
         <Layout>
@@ -207,35 +268,125 @@ https://www.overstock.com/...`}
             <Card>
               <BlockStack gap="400">
                 <Text variant="headingMd" as="h2">
-                  Extracted Products
+                  Review & Edit Products
                 </Text>
                 
-                {actionData?.products?.map((product: any, index: number) => (
+                {products.map((product: any, index: number) => (
+                  <Card key={index}>
+                    <BlockStack gap="400">
+                      <InlineStack gap="400" align="start">
+                        {product.image && (
+                          <Thumbnail
+                            source={product.image}
+                            alt={product.title}
+                            size="large"
+                          />
+                        )}
+                        <BlockStack gap="200">
+                          <Text variant="headingSm" as="h3">
+                            {product.title || 'Unknown Product'}
+                          </Text>
+                          <Text variant="bodyMd">
+                            Price: ${product.price || 0}
+                          </Text>
+                          {product.error && (
+                            <Badge tone="critical">Error: {product.error}</Badge>
+                          )}
+                        </BlockStack>
+                      </InlineStack>
+                      
+                      <InlineStack gap="400" align="end">
+                        <div style={{ width: '100px' }}>
+                          <TextField
+                            label="Quantity"
+                            type="number"
+                            value={product.quantity.toString()}
+                            onChange={(value) => updateProductQuantity(index, parseInt(value) || 1)}
+                            min={1}
+                            autoComplete="off"
+                          />
+                        </div>
+                        <Button 
+                          variant="primary" 
+                          tone="critical"
+                          onClick={() => removeProduct(index)}
+                        >
+                          Remove
+                        </Button>
+                      </InlineStack>
+                    </BlockStack>
+                  </Card>
+                ))}
+                
+                <InlineStack gap="400" align="end">
+                  <Text variant="headingMd" as="h3">
+                    Total Items: {products.length}
+                  </Text>
+                  <Text variant="headingMd" as="h3">
+                    Total Value: ${products.reduce((sum, p) => sum + (p.price * p.quantity), 0).toFixed(2)}
+                  </Text>
+                </InlineStack>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
+  // Step 3: Price Verification Page
+  if (currentStep === 'verify') {
+    return (
+      <Page
+        title="SDL Instant Import Quote"
+        subtitle="Step 3: Verify Prices"
+        backAction={{ onAction: () => handleNextStep('review') }}
+        primaryAction={{
+          content: "Calculate Final Costs →",
+          onAction: () => handleNextStep(),
+        }}
+      >
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="400">
+                <Text variant="headingMd" as="h2">
+                  Double-Check Scraped Prices
+                </Text>
+                <Text variant="bodyMd" color="subdued">
+                  Please verify these prices are correct before we calculate your final import costs.
+                  All items will be delivered to: <strong>6 Progress Street, Elizabeth, NJ 07201</strong>
+                </Text>
+                
+                {verifiedProducts.map((product: any, index: number) => (
                   <Card key={index}>
                     <InlineStack gap="400" align="start">
                       {product.image && (
-                        <img 
-                          src={product.image} 
+                        <Thumbnail
+                          source={product.image}
                           alt={product.title}
-                          style={{ width: '80px', height: '80px', objectFit: 'cover' }}
+                          size="large"
                         />
                       )}
                       <BlockStack gap="200">
                         <Text variant="headingSm" as="h3">
-                          {product.title || 'Unknown Product'}
-                        </Text>
-                        <Text variant="bodyMd">
-                          Price: ${product.price || 0}
+                          {product.title}
                         </Text>
                         <Text variant="bodyMd" color="subdued">
                           Quantity: {product.quantity}
                         </Text>
-                        {product.error && (
-                          <Text variant="bodyMd" color="critical">
-                            Error: {product.error}
-                          </Text>
-                        )}
                       </BlockStack>
+                      <div style={{ width: '150px' }}>
+                        <TextField
+                          label="Price per item"
+                          type="number"
+                          value={product.price.toString()}
+                          onChange={(value) => updateVerifiedPrice(index, parseFloat(value) || 0)}
+                          prefix="$"
+                          step={0.01}
+                          autoComplete="off"
+                        />
+                      </div>
                     </InlineStack>
                   </Card>
                 ))}
@@ -247,18 +398,99 @@ https://www.overstock.com/...`}
     );
   }
 
-  // Placeholder for other steps
+  // Step 4: Final Cost Breakdown
+  if (currentStep === 'breakdown' && actionData?.calculation) {
+    const calc = actionData.calculation;
+    
+    return (
+      <Page
+        title="SDL Instant Import Quote"
+        subtitle="Step 4: Final Cost Breakdown"
+        backAction={{ onAction: () => handleNextStep('verify') }}
+        primaryAction={{
+          content: "Start Over",
+          onAction: () => {
+            setCurrentStep('input');
+            setProducts([]);
+            setVerifiedProducts([]);
+            setUrls('');
+          },
+        }}
+      >
+        <Layout>
+          <Layout.Section>
+            <Card>
+              <BlockStack gap="600">
+                <Text variant="headingLg" as="h2">
+                  Import Cost Breakdown
+                </Text>
+                
+                <div style={{ 
+                  display: 'grid', 
+                  gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', 
+                  gap: '16px' 
+                }}>
+                  <Card>
+                    <BlockStack gap="200">
+                      <Text variant="headingSm" color="subdued">First Cost</Text>
+                      <Text variant="headingLg">${calc.breakdown.firstCost.toFixed(2)}</Text>
+                    </BlockStack>
+                  </Card>
+                  
+                  <Card>
+                    <BlockStack gap="200">
+                      <Text variant="headingSm" color="subdued">Customs Cost (26.5%)</Text>
+                      <Text variant="headingLg">${calc.breakdown.customsCost.toFixed(2)}</Text>
+                    </BlockStack>
+                  </Card>
+                  
+                  <Card>
+                    <BlockStack gap="200">
+                      <Text variant="headingSm" color="subdued">USA to NJ Delivery</Text>
+                      <Text variant="headingLg">${calc.breakdown.deliveryCost.toFixed(2)}</Text>
+                    </BlockStack>
+                  </Card>
+                  
+                  <Card>
+                    <BlockStack gap="200">
+                      <Text variant="headingSm" color="subdued">Entry Fees ({calc.totalItems} items)</Text>
+                      <Text variant="headingLg">${calc.breakdown.entryFees.toFixed(2)}</Text>
+                    </BlockStack>
+                  </Card>
+                  
+                  <Card>
+                    <BlockStack gap="200">
+                      <Text variant="headingSm" color="subdued">Shipping & Handling</Text>
+                      <Text variant="headingLg">${calc.breakdown.shippingHandling.toFixed(2)}</Text>
+                    </BlockStack>
+                  </Card>
+                </div>
+                
+                <Card>
+                  <BlockStack gap="400">
+                    <Text variant="headingLg" as="h3">
+                      Total Import Cost: ${calc.breakdown.total.toFixed(2)}
+                    </Text>
+                    <Text variant="bodyMd" color="subdued">
+                      Total Volume: {calc.totalVolume.toFixed(2)} ft³ | 
+                      Container Utilization: {((calc.totalVolume / 1165) * 100).toFixed(1)}%
+                    </Text>
+                  </BlockStack>
+                </Card>
+              </BlockStack>
+            </Card>
+          </Layout.Section>
+        </Layout>
+      </Page>
+    );
+  }
+
   return (
-    <Page title="SDL Instant Import Quote">
+    <Page title="Loading...">
       <Layout>
         <Layout.Section>
           <Card>
-            <Text variant="headingMd" as="h2">
-              Step {currentStep === 'verify' ? '3: Price Verification' : '4: Final Breakdown'}
-            </Text>
-            <Text variant="bodyMd">
-              This step is under development.
-            </Text>
+            <Text variant="bodyMd">Processing...</Text>
           </Card>
         </Layout.Section>
       </Layout>
