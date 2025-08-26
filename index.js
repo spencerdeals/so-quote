@@ -1,8 +1,8 @@
-// SDL Instant Import — "Instant Import 5 + WF Plus" (Merged + Aggressive JSON mining)
+// SDL Instant Import — "Instant Import 5 + WF Plus v2" (Aggressive JSON + broader selectors + longer wait)
 // Endpoints: /health, /extractProduct, /quote, /shopify/draft
 // Scraper: render_js + long wait (no js_scenario)
 // Env required: SCRAPINGBEE_API_KEY
-// Optional: SCRAPINGBEE_PREMIUM=true (premium_proxy)
+// Optional: SCRAPINGBEE_PREMIUM=true
 // Optional: SHOPIFY_SHOP=yourstore.myshopify.com, SHOPIFY_ACCESS_TOKEN=shpat_xxx
 
 const express = require("express");
@@ -21,27 +21,19 @@ const U = {
   safeHost(u) { try { return new URL(u).hostname; } catch { return ""; } },
   parsePrice(s) { const n = parseFloat(String(s).replace(/[^\d.]/g, "")); return isFinite(n) ? n : 0; },
   pick(...vals) { for (const v of vals) if (v != null && String(v).trim() !== "") return v; return null; },
-  slugTitle(u) {
-    try {
+  slugTitle(u) { try {
       const seg = (new URL(u).pathname || "").split("/").filter(Boolean).pop() || "";
       const cleaned = seg.replace(/[-_]+/g, " ").replace(/\b(pdp|html|w\d+)\b/gi, "").trim();
       return cleaned && /[a-z]/i.test(cleaned) ? cleaned : null;
     } catch { return null; }
-  }
 };
 
 function looksLikeBotWall(html) {
-  const h = html.slice(0, 100_000).toLowerCase();
-  return (
-    h.includes("are you a robot") ||
-    h.includes("access denied") ||
-    h.includes("attention required") ||
-    h.includes("/captcha") ||
-    h.includes("bot detection")
-  );
+  const h = html.slice(0, 120_000).toLowerCase();
+  return h.includes("are you a robot") || h.includes("access denied") || h.includes("/captcha");
 }
 
-// ---------- ScrapingBee: render_js + long wait ----------
+// ---------- ScrapingBee (render_js + long wait) ----------
 async function beeGet(url, { apiKey, wait, premium, headers }) {
   const qs = new URLSearchParams();
   qs.set("api_key", apiKey);
@@ -68,15 +60,15 @@ async function fetchWithBee(url) {
   const isAmazon  = /(^|\.)amazon\./.test(host);
   const premium   = String(process.env.SCRAPINGBEE_PREMIUM || "").toLowerCase() === "true";
 
-  const wait = (isWayfair || isAmazon) ? 7000 : 4000; // give React/Next time to hydrate
+  const wait = (isWayfair || isAmazon) ? 9000 : 4500; // longer hydration window
   const headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
     "Accept-Language": "en-US,en;q=0.9"
   };
 
   let r = await beeGet(url, { apiKey, wait, premium, headers });
   if (r.status >= 400 && r.status < 500) {
-    // Retry once with longer wait
+    // one retry with extra wait
     r = await beeGet(url, { apiKey, wait: wait + 3000, premium, headers });
   }
   return { status: r.status, html: r.html, host, wait, premium };
@@ -120,27 +112,23 @@ function mineJsonAggressively(html, document) {
   const imageSet = new Set();
   const priceSet = new Set();
 
-  function pushTitle(v) { if (!v) return; const s=String(v).trim(); if (s) titleSet.add(s); }
-  function pushImage(v) { if (!v) return; const s=String(v).trim(); if (/^https?:\/\//i.test(s)) imageSet.add(s); }
+  function pushTitle(v) { if (!v) return; const s = String(v).trim(); if (s) titleSet.add(s); }
+  function pushImage(v) { if (!v) return; const s = String(v).trim(); if (/^https?:\/\//i.test(s)) imageSet.add(s); }
   function pushPrice(v) { const n = U.parsePrice(v); if (n > 0) priceSet.add(n); }
 
   const titleKeys = ["title","name","productTitle","seoTitle"];
   const imageKeys = ["image","imageUrl","primaryImage","hiRes","src","url","ogImage"];
-  const priceKeys = [
-    "price","formattedPrice","displayPrice","currentPrice","priceAmount",
-    "amount","value","sellingPrice","salePrice","listPrice","buyBoxPrice","lowPrice","highPrice"
-  ];
+  const priceKeys = ["price","formattedPrice","displayPrice","currentPrice","priceAmount","amount","value","sellingPrice","salePrice","listPrice","buyBoxPrice","lowPrice","highPrice"];
 
   for (const body of blocks) {
     try {
       const obj = JSON.parse(body);
       const stack = [obj];
       let steps = 0;
-      while (stack.length && steps++ < 500000) {
+      while (stack.length && steps++ < 600000) {
         const cur = stack.pop();
         if (!cur || typeof cur !== "object") continue;
 
-        // generic key hits
         for (const k of titleKeys) if (k in cur) pushTitle(cur[k]);
         for (const k of imageKeys) if (k in cur) pushImage(cur[k]);
         for (const k of priceKeys) if (k in cur) pushPrice(cur[k]);
@@ -160,11 +148,9 @@ function mineJsonAggressively(html, document) {
     } catch {}
   }
 
-  // choose good-looking values
   const title = [...titleSet].find(s => s.length > 8) || [...titleSet][0] || null;
   const image = [...imageSet][0] || null;
   const price = [...priceSet].sort((a,b)=>a-b)[0] || 0;
-
   return { title, image, price, counts: { titles: titleSet.size, images: imageSet.size, prices: priceSet.size } };
 }
 
@@ -214,7 +200,7 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 3) Aggressive JSON mining (deep)
+  // 3) Aggressive JSON mining
   if (!price || !title || !image) {
     const mined = mineJsonAggressively(html, document);
     signals.mined = mined.counts;
@@ -223,7 +209,7 @@ function extractFromHTML(html, url) {
     if (!price && mined.price > 0) { price = mined.price; source = source === "none" ? "json-miner" : source; }
   }
 
-  // 4) Generic DOM selectors
+  // 4) Generic DOM selectors (broadened)
   if (!price) {
     const sels = [
       "#corePriceDisplay_desktop_feature_div .a-offscreen",
@@ -240,24 +226,26 @@ function extractFromHTML(html, url) {
       if (!el) continue;
       const txt = el.getAttribute("content") || el.textContent || "";
       const p = U.parsePrice(txt);
-      if (p > 0) { price = p; source = source === "none" ? `selector:${sel}` : source; signals.selectorHit = sel; break; }
+      if (p > 0) { price = p; if (source === "none") source = `selector:${sel}`; signals.selectorHit = sel; break; }
     }
   }
 
-  // 5) Title/Image fallbacks
+  // 5) Title/Image fallbacks (OG/Twitter/meta)
   if (!title) {
     const og  = document.querySelector('meta[property="og:title"]')?.getAttribute("content");
+    const twt = document.querySelector('meta[name="twitter:title"]')?.getAttribute("content");
     const h1  = document.querySelector("h1")?.textContent;
     const amz = document.querySelector("#productTitle")?.textContent;
     const t   = document.querySelector("title")?.textContent;
-    title = (U.pick(amz, og, h1, t) || "").trim();
+    title = (U.pick(amz, og, twt, h1, t) || "").trim() || U.slugTitle(url);
   }
   if (!image) {
     const ogi  = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
+    const twi  = document.querySelector('meta[name="twitter:image"]')?.getAttribute("content");
     const link = document.querySelector('link[rel="image_src"]')?.getAttribute("href");
     const amzi = document.querySelector("#landingImage")?.getAttribute("data-old-hires")
                || document.querySelector("#imgTagWrapperId img")?.getAttribute("src");
-    image = U.pick(ogi, link, amzi);
+    image = U.pick(ogi, twi, link, amzi);
   }
 
   // 6) Last-resort price regex
@@ -270,9 +258,6 @@ function extractFromHTML(html, url) {
     }
     if (best) { price = best; if (source === "none") source = "regex"; }
   }
-
-  // 7) ultra-last-resort title: slug from URL
-  if (!title) title = U.slugTitle(url);
 
   let vendor = null;
   try { vendor = new URL(url).hostname.replace(/^www\./, ""); } catch {}
@@ -288,7 +273,7 @@ function extractFromHTML(html, url) {
   };
 }
 
-// ---------- Quote rules (SDL) ----------
+// ---------- Quote rules ----------
 const DEFAULT_US_SALES_TAX = 0.06625;
 const DEFAULT_FREIGHT_PER_FT3 = 6.00;
 const CARD_FEE_RATE = 0.0325;
@@ -316,10 +301,10 @@ function roundTo95(n) {
 
 // ---------- Routes ----------
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha-3-merged-wfplus" });
+  res.json({ ok: true, version: "alpha-3-merged-wfplus-2" });
 });
 
-// Always return "whatever we can" from extractProduct (partials OK)
+// Always return "whatever we can"
 app.post("/extractProduct", async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -341,7 +326,6 @@ app.post("/extractProduct", async (req, res) => {
   }
 });
 
-// Auto-scrape in /quote if firstCost missing; keep partials if scrape fails
 app.post("/quote", async (req, res) => {
   try {
     const body = req.body || {};
@@ -361,7 +345,7 @@ app.post("/quote", async (req, res) => {
             out._product = prod;
             out._scrapeOk = true;
           } else {
-            out._product = prod;   // keep partial title/image if any
+            out._product = prod;
             out._scrapeOk = false;
           }
         } catch (e) {
@@ -424,7 +408,7 @@ app.post("/quote", async (req, res) => {
     const grandTotal = lines.reduce((s, r) => s + r.retailTotal, 0);
     res.json({
       ok: true,
-      version: "alpha-3-merged-wfplus",
+      version: "alpha-3-merged-wfplus-2",
       totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) },
       lines
     });
@@ -434,7 +418,7 @@ app.post("/quote", async (req, res) => {
   }
 });
 
-// Shopify draft order (keeps variant selections as properties)
+// Shopify draft
 app.post("/shopify/draft", async (req, res) => {
   try {
     const shop = process.env.SHOPIFY_SHOP;
