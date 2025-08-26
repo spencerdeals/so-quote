@@ -1,4 +1,4 @@
-// SDL Instant Import — Wayfair/Amazon Hardened (scenario + auto-fallback)
+// SDL Instant Import — Hardened Backend (Wayfair/Amazon + auto-fallback)
 // Endpoints: /health, /extractProduct, /quote, /shopify/draft
 // Env required: SCRAPINGBEE_API_KEY
 // Optional: SCRAPINGBEE_PREMIUM=true
@@ -15,26 +15,22 @@ app.use(cors());
 app.options("*", cors());
 app.use(express.json({ limit: "2mb" }));
 
-// ---------------- Utilities ----------------
+// ---------- Utils ----------
 const U = {
   safeHost(u) { try { return new URL(u).hostname; } catch { return ""; } },
   parsePrice(s) { const n = parseFloat(String(s).replace(/[^\d.]/g, "")); return isFinite(n) ? n : 0; },
-  pick(...vals) { for (const v of vals) if (v != null && String(v).trim() !== "") return v; return null; },
+  pick(...vals) { for (const v of vals) if (v != null && String(v).trim() !== "") return v; return null; }
 };
 
 function looksLikeBotWall(html) {
   const h = html.slice(0, 30000).toLowerCase();
-  return (
-    h.includes("are you a robot") ||
-    h.includes("access denied") ||
-    h.includes("attention required") ||
-    h.includes("/captcha") ||
-    h.includes("bot detection")
-  );
+  return h.includes("are you a robot") || h.includes("access denied") ||
+         h.includes("attention required") || h.includes("/captcha") || h.includes("bot detection");
 }
 
-// ---------------- ScrapingBee fetch with auto-fallback ----------------
+// ---------- ScrapingBee (POST scenario + auto-fallback) ----------
 async function beeRequest(url, opts) {
+  // ScrapingBee supports scenarios via query params with JSON; HTTP method can be GET.
   const qs = new URLSearchParams();
   qs.set("api_key", opts.apiKey);
   qs.set("url", url);
@@ -65,38 +61,31 @@ async function fetchWithBee(url) {
     "Accept-Language": "en-US,en;q=0.9"
   };
 
-  // Known-good cookie-accept scenario (no scroll, no wait_for)
-  const scenario =
-    isWayfair
-      ? [
-          { name: "wait",  args: { wait: 900 } },
-          { name: "click", args: { selector: "#onetrust-accept-btn-handler" } },
-          { name: "wait",  args: { wait: 1200 } }
-        ]
-      : isAmazon
-      ? [{ name: "wait", args: { wait: 1000 } }]
-      : null;
-
   const wait = (isWayfair || isAmazon) ? 6000 : 2500;
+  const scenario =
+    isWayfair ? [
+      { name: "wait",  args: { wait: 900 } },
+      { name: "click", args: { selector: "#onetrust-accept-btn-handler" } },
+      { name: "wait",  args: { wait: 1200 } }
+    ] :
+    isAmazon ? [
+      { name: "wait", args: { wait: 1000 } }
+    ] : null;
 
-  // 1) Try with scenario (if applicable)
+  // Attempt 1: with scenario (if any)
   let usedScenario = !!scenario;
-  let r1 = await beeRequest(url, {
-    apiKey, wait, premium, customHeaders: headers, jsScenario: scenario
-  });
+  let r = await beeRequest(url, { apiKey, wait, premium, customHeaders: headers, jsScenario: scenario });
 
-  // 2) If Bee says bad request/blocked (4xx) or HTML looks wrong, retry without scenario, longer wait
-  if (r1.status >= 400 && r1.status < 500) {
+  // Auto-fallback: if 4xx (e.g., 400) retry without scenario with longer wait
+  if (r.status >= 400 && r.status < 500) {
     usedScenario = false;
-    r1 = await beeRequest(url, {
-      apiKey, wait: wait + 2000, premium, customHeaders: headers, jsScenario: null
-    });
+    r = await beeRequest(url, { apiKey, wait: wait + 2000, premium, customHeaders: headers, jsScenario: null });
   }
 
-  return { status: r1.status, html: r1.html, host, wait, usedScenario, premium };
+  return { status: r.status, html: r.html, host, wait, premium, usedScenario };
 }
 
-// ---------------- Variant extractor ----------------
+// ---------- Variants ----------
 function extractVariants(document) {
   const out = [];
   const selects = Array.from(document.querySelectorAll("select"));
@@ -117,7 +106,7 @@ function extractVariants(document) {
   return out;
 }
 
-// ---------------- Extraction pipeline ----------------
+// ---------- Extraction ----------
 function extractFromHTML(html, url) {
   const dom = new JSDOM(html);
   const { document } = dom.window;
@@ -153,7 +142,7 @@ function extractFromHTML(html, url) {
     } catch {}
   }
 
-  // 2) Wayfair direct selector (common)
+  // 2) Wayfair selector
   if (!price) {
     const wf = document.querySelector("[data-hbkit-price]");
     if (wf) {
@@ -162,7 +151,7 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 3) Embedded JSON state (NEXT_DATA / application/json)
+  // 3) Embedded JSON (NEXT_DATA / application/json)
   if (!price || !title || !image) {
     const blocks = [];
     const nextData = document.querySelector("#__NEXT_DATA__");
@@ -170,8 +159,8 @@ function extractFromHTML(html, url) {
     const appJson = Array.from(document.querySelectorAll('script[type="application/json"]'));
     for (const s of appJson) if (s.textContent) blocks.push(s.textContent);
     if (!blocks.length) {
-      const matches = html.match(/<script[^>]*type=["']application\/json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
-      for (const blk of matches) {
+      const m = html.match(/<script[^>]*type=["']application\/json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+      for (const blk of m) {
         const body = blk.replace(/^.*?>/s, "").replace(/<\/script>$/i, "");
         blocks.push(body);
       }
@@ -183,10 +172,8 @@ function extractFromHTML(html, url) {
         while (stack.length) {
           const cur = stack.pop();
           if (!cur || typeof cur !== "object") continue;
-
           if (!title) title = cur.title || cur.name || title;
           if (!image) image = cur.image || cur.imageUrl || cur.primaryImage || image;
-
           const keys = ["price", "priceAmount", "price_value", "currentPrice", "amount", "value"];
           for (const k of keys) {
             if (k in cur) {
@@ -194,7 +181,6 @@ function extractFromHTML(html, url) {
               if (p > 0) { price = p; if (source === "none") source = `json:${k}`; }
             }
           }
-
           if (Array.isArray(cur)) for (const v of cur) stack.push(v);
           else for (const v of Object.values(cur)) stack.push(v);
         }
@@ -203,7 +189,7 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 4) Generic DOM selectors
+  // 4) Generic DOM selectors (works for many stores/Amazon)
   if (!price) {
     const sels = [
       "#corePriceDisplay_desktop_feature_div .a-offscreen",
@@ -224,20 +210,20 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 5) Title/Image fallbacks
+  // 5) Fallbacks
   if (!title) {
-    const og  = document.querySelector('meta[property="og:title"]')?.getAttribute("content");
-    const h1  = document.querySelector("h1")?.textContent;
+    const og = document.querySelector('meta[property="og:title"]')?.getAttribute("content");
+    const h1 = document.querySelector("h1")?.textContent;
     const amz = document.querySelector("#productTitle")?.textContent;
-    const t   = document.querySelector("title")?.textContent;
+    const t = document.querySelector("title")?.textContent;
     title = (U.pick(amz, og, h1, t) || "").trim();
   }
   if (!image) {
-    const ogi  = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
-    const link = document.querySelector('link[rel="image_src"]')?.getAttribute("href");
+    const ogi = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
+    const linki = document.querySelector('link[rel="image_src"]')?.getAttribute("href");
     const amzi = document.querySelector("#landingImage")?.getAttribute("data-old-hires")
                || document.querySelector("#imgTagWrapperId img")?.getAttribute("src");
-    image = U.pick(ogi, link, amzi);
+    image = U.pick(ogi, linki, amzi);
   }
 
   // 6) Last-resort price regex
@@ -265,7 +251,7 @@ function extractFromHTML(html, url) {
   };
 }
 
-// ---------------- Quote rules ----------------
+// ---------- Quote rules ----------
 const DEFAULT_US_SALES_TAX = 0.06625;
 const DEFAULT_FREIGHT_PER_FT3 = 6.00;
 const CARD_FEE_RATE = 0.0325;
@@ -273,10 +259,10 @@ const DEFAULT_DUTY_UPHOLSTERED = 0.25;
 const DEFAULT_VOLUME_FT3 = 11.33;
 const FIXED_FEES_PER_SHIPMENT = 0;
 
-function marginByVolume(totalFt3) {
-  if (totalFt3 < 10) return 0.40;
-  if (totalFt3 < 20) return 0.30;
-  if (totalFt3 < 50) return 0.25;
+function marginByVolume(ft3) {
+  if (ft3 < 10) return 0.40;
+  if (ft3 < 20) return 0.30;
+  if (ft3 < 50) return 0.25;
   return 0.20;
 }
 function capByLanded(landed) {
@@ -291,11 +277,12 @@ function roundTo95(n) {
   return Number((dollars + 0.95).toFixed(2));
 }
 
-// ---------------- Routes ----------------
+// ---------- Routes ----------
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha-3-wayfair-fallback" });
+  res.json({ ok: true, version: "alpha-3-solid" });
 });
 
+// Extract product (robust, returns partials if needed)
 app.post("/extractProduct", async (req, res) => {
   try {
     const { url } = req.body || {};
@@ -309,7 +296,7 @@ app.post("/extractProduct", async (req, res) => {
       ok: true,
       url,
       ...product,
-      used: { host: fetched.host, status: fetched.status, wait: fetched.wait, jsScenarioActive: fetched.usedScenario, premium: fetched.premium },
+      used: { host: fetched.host, status: fetched.status, wait: fetched.wait, premium: fetched.premium, jsScenarioActive: fetched.usedScenario },
       botWall: botWall || undefined
     });
   } catch (e) {
@@ -317,6 +304,7 @@ app.post("/extractProduct", async (req, res) => {
   }
 });
 
+// Quote calc
 app.post("/quote", async (req, res) => {
   try {
     const body = req.body || {};
@@ -336,7 +324,7 @@ app.post("/quote", async (req, res) => {
             out._product = prod;
             out._scrapeOk = true;
           } else {
-            out._product = prod;
+            out._product = prod; // might contain partial title/image
             out._scrapeOk = false;
           }
         } catch (e) {
@@ -353,9 +341,9 @@ app.post("/quote", async (req, res) => {
       return sum + v * qty;
     }, 0);
 
-    const volTierMargin = marginByVolume(totalFt3);
+    const volMargin = marginByVolume(totalFt3);
     const totalQty = resolved.reduce((s, it) => s + (Number(it.qty) || 1), 0);
-    const perUnitFixedFee = totalQty > 0 ? (FIXED_FEES_PER_SHIPMENT / totalQty) : 0;
+    const perUnitFixed = totalQty > 0 ? (FIXED_FEES_PER_SHIPMENT / totalQty) : 0;
 
     const lines = resolved.map((it) => {
       const name = it.name || (it._product?.title || "Item");
@@ -368,17 +356,14 @@ app.post("/quote", async (req, res) => {
         (category.includes("upholster") ? DEFAULT_DUTY_UPHOLSTERED : 0.0);
       const taxExempt = Boolean(it.taxExempt);
 
-      const usTax = taxExempt ? 0 : firstCost * 0.06625;
+      const usTax = taxExempt ? 0 : firstCost * DEFAULT_US_SALES_TAX;
       const freight = volumeFt3 * DEFAULT_FREIGHT_PER_FT3;
-      const fixedFee = perUnitFixedFee;
+      const fixedFee = perUnitFixed;
       const duty = firstCost * dutyRate;
 
-      const landedPerUnit = firstCost + usTax + freight + fixedFee + duty;
-      const cap = capByLanded(landedPerUnit);
-      const marginRate = Math.min(volTierMargin, cap);
-      const retailPreCard = landedPerUnit * (1 + marginRate);
-      const retailWithCard = retailPreCard * (1 + 0.0325);
-      const retail = roundTo95(retailWithCard);
+      const landed = firstCost + usTax + freight + fixedFee + duty;
+      const marginRate = Math.min(volMargin, capByLanded(landed));
+      const retail = roundTo95(landed * (1 + marginRate) * (1 + CARD_FEE_RATE));
       const total = retail * qty;
 
       return {
@@ -400,20 +385,14 @@ app.post("/quote", async (req, res) => {
     });
 
     const grandTotal = lines.reduce((s, r) => s + r.retailTotal, 0);
-
-    res.json({
-      ok: true,
-      version: "alpha-3-wayfair-fallback",
-      totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) },
-      lines
-    });
+    res.json({ ok: true, version: "alpha-3-solid", totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) }, lines });
   } catch (e) {
     console.error(e);
     res.status(500).json({ ok:false, error:"Server error." });
   }
 });
 
-// ---------------- Shopify draft order ----------------
+// Shopify draft
 app.post("/shopify/draft", async (req, res) => {
   try {
     const shop = process.env.SHOPIFY_SHOP;
