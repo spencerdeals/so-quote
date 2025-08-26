@@ -1,5 +1,6 @@
-// SDL Instant Import — stable backend (CORS + extractor + quote + draft)
-// Version: alpha-3-cors-stable
+// SDL Instant Import — FINAL build (CORS + Deep Extractor + Fallbacks)
+// Version: alpha-3-final
+// Endpoints: /health, /extractProduct, /quote, /shopify/draft
 // Env required: SCRAPINGBEE_API_KEY
 // Optional: SCRAPINGBEE_PREMIUM=true
 // Optional: SHOPIFY_SHOP, SHOPIFY_ACCESS_TOKEN
@@ -10,7 +11,7 @@ const { JSDOM } = require("jsdom");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* ---------- CORS: allow all origins (no cookies used) ---------- */
+/* --------------------- CORS (allow all; no cookies used) --------------------- */
 app.use(function (req, res, next) {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Vary", "Origin");
@@ -19,15 +20,11 @@ app.use(function (req, res, next) {
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
-
 app.use(express.json({ limit: "2mb" }));
 
-/* ---------- Utils ---------- */
+/* --------------------- Utils --------------------- */
 function safeHost(u) { try { return new URL(u).hostname; } catch (e) { return ""; } }
-function parsePrice(s) {
-  const n = parseFloat(String(s).replace(/[^\d.]/g, ""));
-  return isFinite(n) ? n : 0;
-}
+function parsePrice(s) { const n = parseFloat(String(s).replace(/[^\d.]/g, "")); return isFinite(n) ? n : 0; }
 function pick() {
   for (var i = 0; i < arguments.length; i++) {
     var v = arguments[i];
@@ -45,7 +42,7 @@ function slugTitle(u) {
   } catch (e) { return null; }
 }
 
-/* ---------- ScrapingBee fetch (simple: render_js + wait) ---------- */
+/* --------------------- ScrapingBee (render_js + long wait) --------------------- */
 async function beeGet(url, opts) {
   var qs = new URLSearchParams();
   qs.set("api_key", opts.apiKey);
@@ -71,7 +68,7 @@ async function fetchWithBee(url) {
   var isAmazon = /(^|\.)amazon\./.test(host);
   var premium = String(process.env.SCRAPINGBEE_PREMIUM || "").toLowerCase() === "true";
 
-  var wait = (isWayfair || isAmazon) ? 8000 : 4500;
+  var wait = (isWayfair || isAmazon) ? 9000 : 5000;
   var headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
     "Accept-Language": "en-US,en;q=0.9"
@@ -84,7 +81,7 @@ async function fetchWithBee(url) {
   return { status: r.status, html: r.html, host: host, wait: wait, premium: premium };
 }
 
-/* ---------- Variants ---------- */
+/* --------------------- Variants --------------------- */
 function extractVariants(document) {
   var out = [];
   var selects = Array.from(document.querySelectorAll("select"));
@@ -94,7 +91,6 @@ function extractVariants(document) {
     var options = Array.from(sel.querySelectorAll("option")).map(function (o) { return (o.textContent || "").trim(); }).filter(Boolean);
     if (options.length >= 2 && options.length <= 50) out.push({ name: nameGuess, options: options });
   });
-  // Amazon-style variants (harmless elsewhere)
   var twister = document.querySelector("#twister, #variation_color_name, #variation_size_name");
   if (twister) {
     var labels = Array.from(twister.querySelectorAll("label, span.a-size-base")).map(function (x) { return (x.textContent || "").trim(); }).filter(Boolean);
@@ -103,105 +99,109 @@ function extractVariants(document) {
   return out;
 }
 
-/* ---------- Extraction ---------- */
+/* --------------------- Deep Extraction --------------------- */
 function extractFromHTML(html, url) {
   var dom = new JSDOM(html);
   var document = dom.window.document;
 
-  var title = null, image = null, price = null, currency = null, source = "none";
+  var title = null, image = null, price = null, currency = null;
 
-  // 1) JSON-LD Product
+  // 1) JSON-LD Product (including @graph)
   var ldScripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
-  for (var i = 0; i < ldScripts.length; i++) {
-    try {
-      var json = JSON.parse(ldScripts[i].textContent || "{}");
-      var arr = Array.isArray(json) ? json : [json];
-      for (var j = 0; j < arr.length; j++) {
-        var node = arr[j];
-        if (!node || typeof node !== "object") continue;
-        var isProduct = (String(node["@type"] || "").toLowerCase().indexOf("product") >= 0) || node.offers;
-        if (isProduct) {
-          title = node.name || title;
-          if (!image) {
-            if (Array.isArray(node.image)) image = node.image[0] || null;
-            else if (typeof node.image === "string") image = node.image || null;
-          }
-          if (!price && node.offers) {
-            var offers = Array.isArray(node.offers) ? node.offers[0] : node.offers;
-            var p = offers && (offers.price || offers.lowPrice || offers.highPrice);
-            if (typeof p === "string") p = parsePrice(p);
-            if (isFinite(p)) price = Number(p);
-            currency = offers && offers.priceCurrency || currency;
-            source = "jsonld";
-          }
+  function scanLD(json) {
+    var arr = Array.isArray(json) ? json : [json];
+    for (var j = 0; j < arr.length; j++) {
+      var node = arr[j];
+      if (!node || typeof node !== "object") continue;
+      if (node["@graph"] && Array.isArray(node["@graph"])) { scanLD(node["@graph"]); }
+      var type = String(node["@type"] || "").toLowerCase();
+      var isProduct = type.indexOf("product") >= 0 || node.offers;
+      if (isProduct) {
+        if (!title && node.name) title = String(node.name);
+        if (!image) {
+          if (Array.isArray(node.image)) image = node.image[0] || null;
+          else if (typeof node.image === "string") image = node.image;
+        }
+        if (!price && node.offers) {
+          var offers = Array.isArray(node.offers) ? node.offers[0] : node.offers;
+          var p = offers && (offers.price || offers.lowPrice || offers.highPrice);
+          if (typeof p === "string") p = parsePrice(p);
+          if (isFinite(p)) price = Number(p);
+          currency = offers && offers.priceCurrency || currency;
         }
       }
-      if (title || image || price) break;
-    } catch (e) {}
+    }
   }
+  for (var i = 0; i < ldScripts.length; i++) { try { scanLD(JSON.parse(ldScripts[i].textContent || "{}")); } catch (e) {} if (title || image || price) break; }
 
-  // 2) Wayfair direct selector
+  // 2) Wayfair price attribute
   if (!price) {
     var wf = document.querySelector("[data-hbkit-price]");
     if (wf) {
       var wp = parsePrice(wf.getAttribute("data-hbkit-price"));
-      if (wp > 0) { price = wp; source = "selector:[data-hbkit-price]"; }
+      if (wp > 0) price = wp;
     }
   }
 
-  // 3) Embedded JSON state (NEXT_DATA + application/json)
-  if (!price || !title || !image) {
-    var blocks = [];
-    var nextData = document.querySelector("#__NEXT_DATA__");
-    if (nextData && nextData.textContent) blocks.push(nextData.textContent);
-    var appJson = Array.from(document.querySelectorAll('script[type="application/json"]'));
-    appJson.forEach(function (s) { if (s.textContent) blocks.push(s.textContent); });
-    var matches = html.match(/<script[^>]*type=["']application\/json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
-    matches.forEach(function (blk) {
-      var body = blk.replace(/^.*?>/s, "").replace(/<\/script>$/i, "");
-      blocks.push(body);
-    });
+  // 3) __NEXT_DATA__ and any application/json blocks
+  var blocks = [];
+  var nextData = document.querySelector("#__NEXT_DATA__");
+  if (nextData && nextData.textContent) blocks.push(nextData.textContent);
+  var appJson = Array.from(document.querySelectorAll('script[type="application/json"]'));
+  appJson.forEach(function (s) { if (s.textContent) blocks.push(s.textContent); });
+  var matches = html.match(/<script[^>]*type=["']application\/json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+  matches.forEach(function (blk) {
+    var body = blk.replace(/^.*?>/s, "").replace(/<\/script>$/i, "");
+    blocks.push(body);
+  });
 
-    function scanObj(obj) {
-      var stack = [obj];
-      var safety = 0;
-      while (stack.length && safety++ < 300000) {
-        var cur = stack.pop();
-        if (!cur || typeof cur !== "object") continue;
+  function scanObj(obj) {
+    var stack = [obj];
+    var safety = 0;
+    while (stack.length && safety++ < 600000) {
+      var cur = stack.pop();
+      if (!cur || typeof cur !== "object") continue;
 
-        if (!title) {
-          if (cur.title) title = String(cur.title);
-          else if (cur.name) title = String(cur.name);
-        }
-        if (!image) {
-          if (cur.image && typeof cur.image === "string") image = cur.image;
-          else if (cur.imageUrl) image = cur.imageUrl;
-          else if (cur.primaryImage) image = cur.primaryImage;
-          else if (cur.url && /^https?:\/\//i.test(cur.url) && /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(cur.url)) image = cur.url;
-        }
-        if (!price) {
-          var keys = ["price","formattedPrice","displayPrice","currentPrice","priceAmount","amount","value","sellingPrice","salePrice","listPrice","buyBoxPrice","lowPrice","highPrice"];
-          for (var k = 0; k < keys.length; k++) {
-            var key = keys[k];
-            if (cur.hasOwnProperty(key)) {
-              var n = parsePrice(cur[key]);
-              if (n > 0) { price = n; break; }
-            }
+      if (!title) {
+        if (cur.title) title = String(cur.title);
+        else if (cur.name) title = String(cur.name);
+      }
+      if (!image) {
+        if (cur.image && typeof cur.image === "string") image = cur.image;
+        else if (cur.imageUrl) image = cur.imageUrl;
+        else if (cur.primaryImage) image = cur.primaryImage;
+        else if (cur.url && /^https?:\/\//i.test(cur.url) && /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(cur.url)) image = cur.url;
+      }
+      if (!price) {
+        var keys = ["price","formattedPrice","displayPrice","currentPrice","priceAmount","amount","value","sellingPrice","salePrice","listPrice","buyBoxPrice","lowPrice","highPrice"];
+        for (var k = 0; k < keys.length; k++) {
+          var key = keys[k];
+          if (cur.hasOwnProperty(key)) {
+            var n = parsePrice(cur[key]);
+            if (n > 0) { price = n; break; }
           }
         }
-
-        if (Array.isArray(cur)) for (var a = 0; a < cur.length; a++) stack.push(cur[a]);
-        else for (var v in cur) if (cur.hasOwnProperty(v)) stack.push(cur[v]);
       }
-    }
 
-    for (var b = 0; b < blocks.length; b++) {
-      try { scanObj(JSON.parse(blocks[b])); } catch (e) {}
-      if (title && (image || price)) break;
+      if (Array.isArray(cur)) for (var a = 0; a < cur.length; a++) stack.push(cur[a]);
+      else for (var v in cur) if (cur.hasOwnProperty(v)) stack.push(cur[v]);
     }
   }
+  for (var b = 0; b < blocks.length; b++) { try { scanObj(JSON.parse(blocks[b])); } catch (e) {} if (title && (image || price)) break; }
 
-  // 4) Generic DOM selectors
+  // 4) Scan ALL <script> text for `"price":` style hints (non-JSON)
+  if (!price) {
+    var scripts = Array.from(document.querySelectorAll("script")).map(function (s) { return s.textContent || ""; }).join("\n");
+    var priceJsonRegex = /"price"\s*:\s*"?(\d{1,3}(?:,\d{3})*|\d+)(?:\.(\d{2}))?"?/gi;
+    var m; var minFound = null;
+    while ((m = priceJsonRegex.exec(scripts)) !== null) {
+      var n = parsePrice(m[0]);
+      if (n > 0 && (minFound === null || n < minFound)) minFound = n;
+    }
+    if (minFound != null) price = minFound;
+  }
+
+  // 5) Generic DOM selectors
   if (!price) {
     var sels = [
       "#corePriceDisplay_desktop_feature_div .a-offscreen",
@@ -222,18 +222,18 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 5) Title/Image fallbacks
+  // 6) OG/Twitter/meta for title/image
   if (!title) {
-    var og = document.querySelector('meta[property="og:title"]');
+    var og  = document.querySelector('meta[property="og:title"]');
     var twt = document.querySelector('meta[name="twitter:title"]');
-    var h1 = document.querySelector("h1");
+    var h1  = document.querySelector("h1");
     var amz = document.querySelector("#productTitle");
-    var ttag = document.querySelector("title");
+    var ttag= document.querySelector("title");
     title = (pick(amz && amz.textContent, og && og.getAttribute("content"), twt && twt.getAttribute("content"), h1 && h1.textContent, ttag && ttag.textContent) || "").trim() || slugTitle(url);
   }
   if (!image) {
-    var ogi = document.querySelector('meta[property="og:image"]');
-    var twi = document.querySelector('meta[name="twitter:image"]');
+    var ogi  = document.querySelector('meta[property="og:image"]');
+    var twi  = document.querySelector('meta[name="twitter:image"]');
     var link = document.querySelector('link[rel="image_src"]');
     var amzi = document.querySelector("#landingImage");
     var img2 = document.querySelector("#imgTagWrapperId img");
@@ -241,15 +241,15 @@ function extractFromHTML(html, url) {
       (amzi && amzi.getAttribute("data-old-hires")) || (img2 && img2.getAttribute("src")));
   }
 
-  // 6) Last-resort price regex
+  // 7) Final price regex
   if (!price) {
     var rx = /(USD\s*)?\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|[0-9]+(?:\.[0-9]{2}))/gi;
-    var best = null, m;
-    while ((m = rx.exec(html)) !== null) {
-      var n3 = parsePrice(m[0]);
-      if (n3 >= 5 && (!best || n3 < best)) best = n3;
+    var best = null, mm;
+    while ((mm = rx.exec(html)) !== null) {
+      var nn = parsePrice(mm[0]);
+      if (nn >= 5 && (best === null || nn < best)) best = nn;
     }
-    if (best) price = best;
+    if (best !== null) price = best;
   }
 
   var vendor = null;
@@ -265,7 +265,7 @@ function extractFromHTML(html, url) {
   };
 }
 
-/* ---------- Quote rules ---------- */
+/* --------------------- Quote rules --------------------- */
 var DEFAULT_US_SALES_TAX = 0.06625;
 var DEFAULT_FREIGHT_PER_FT3 = 6.00;
 var CARD_FEE_RATE = 0.0325;
@@ -286,14 +286,14 @@ function capByLanded(landed) {
   return 1.0;
 }
 function roundTo95(n) {
-  var rounded = Math.round(n / 0.05) * 0.05;
-  var dollars = Math.floor(rounded);
-  return Number((dollars + 0.95).toFixed(2));
+  var r = Math.round(n / 0.05) * 0.05;
+  var d = Math.floor(r);
+  return Number((d + 0.95).toFixed(2));
 }
 
-/* ---------- Routes ---------- */
+/* --------------------- Routes --------------------- */
 app.get(["/", "/health"], function (_req, res) {
-  res.json({ ok: true, version: "alpha-3-cors-stable" });
+  res.json({ ok: true, version: "alpha-3-final" });
 });
 
 app.post("/extractProduct", async function (req, res) {
@@ -301,8 +301,8 @@ app.post("/extractProduct", async function (req, res) {
     var url = (req.body && req.body.url) || "";
     if (!url) return res.status(400).json({ ok: false, error: "Missing url" });
     var fetched = await fetchWithBee(url);
-    var product = extractFromHTML(fetched.html, url);
-    res.json({ ok: true, url: url, used: { host: fetched.host, status: fetched.status, wait: fetched.wait, premium: fetched.premium }, ...product });
+    var prod = extractFromHTML(fetched.html, url);
+    res.json({ ok: true, url: url, used: { host: fetched.host, status: fetched.status, wait: fetched.wait, premium: fetched.premium }, ...prod });
   } catch (e) {
     res.status(500).json({ ok: false, error: String(e.message || e) });
   }
@@ -376,7 +376,7 @@ app.post("/quote", async function (req, res) {
     });
 
     var grandTotal = lines.reduce(function (s, r) { return s + r.retailTotal; }, 0);
-    res.json({ ok: true, version: "alpha-3-cors-stable", totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) }, lines: lines });
+    res.json({ ok: true, version: "alpha-3-final", totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) }, lines: lines });
   } catch (e) {
     res.status(500).json({ ok: false, error: "Server error." });
   }
@@ -397,33 +397,15 @@ app.post("/shopify/draft", async function (req, res) {
       if (it.link) props.push({ name: "Source Link", value: it.link });
       if (it.image) props.push({ name: "Image", value: it.image });
       if (it.vendor) props.push({ name: "Vendor", value: it.vendor });
-      if (Array.isArray(it.variantSelections)) {
-        it.variantSelections.forEach(function (v) { props.push({ name: v.name, value: v.value }); });
-      }
-      return {
-        title: it.name || "Special Order — Customer Provided Link",
-        quantity: Number(it.qty) || 1,
-        price: Number(it.unitPrice) || undefined,
-        properties: props
-      };
+      if (Array.isArray(it.variantSelections)) it.variantSelections.forEach(function (v) { props.push({ name: v.name, value: v.value }); });
+
+      return { title: it.name || "Special Order — Customer Provided Link", quantity: Number(it.qty) || 1, price: Number(it.unitPrice) || undefined, properties: props };
     });
 
-    var payload = {
-      draft_order: {
-        line_items: line_items,
-        email: body.customerEmail || undefined,
-        tags: "Special Order,Instant Import",
-        note: body.note || "Instant Import draft order created automatically.",
-        use_customer_default_address: true
-      }
-    };
+    var payload = { draft_order: { line_items: line_items, email: body.customerEmail || undefined, tags: "Special Order,Instant Import", note: body.note || "Instant Import draft order created automatically.", use_customer_default_address: true } };
 
     var url = "https://" + shop + "/admin/api/2024-07/draft_orders.json";
-    var resp = await fetch(url, {
-      method: "POST",
-      headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
-      body: JSON.stringify(payload)
-    });
+    var resp = await fetch(url, { method: "POST", headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" }, body: JSON.stringify(payload) });
     var data = await resp.json();
     if (!resp.ok) return res.status(500).json({ ok: false, error: "Shopify error", detail: data });
     res.json({ ok: true, draft_order: data.draft_order });
@@ -432,6 +414,4 @@ app.post("/shopify/draft", async function (req, res) {
   }
 });
 
-app.listen(PORT, function () {
-  console.log("Backend running on :" + PORT);
-});
+app.listen(PORT, function () { console.log("Backend running on :" + PORT); });
