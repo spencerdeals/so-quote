@@ -1,7 +1,7 @@
 {
-  "name": "so-quote-alpha3-full-ii",
+  "name": "so-quote-alpha3-stepper",
   "version": "1.0.0",
-  "description": "SDL Instant Import — #alpha v3 backend (calculator + ScrapingBee + product extraction)",
+  "description": "SDL Instant Import — #alpha v3 backend (ScrapingBee + ProductExtract + Shopify Draft + Stepper flow)",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
