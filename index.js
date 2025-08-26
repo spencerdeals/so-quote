@@ -1,7 +1,7 @@
-// SDL Instant Import — Wayfair/Amazon Extractor (cookie click + waitFor)
+// SDL Instant Import — Wayfair/Amazon Hardened (scenario + auto-fallback)
 // Endpoints: /health, /extractProduct, /quote, /shopify/draft
 // Env required: SCRAPINGBEE_API_KEY
-// Optional: SCRAPINGBEE_PREMIUM=true (enable premium_proxy)
+// Optional: SCRAPINGBEE_PREMIUM=true
 // Optional: SHOPIFY_SHOP=yourstore.myshopify.com, SHOPIFY_ACCESS_TOKEN=shpat_xxx
 
 const express = require("express");
@@ -23,7 +23,7 @@ const U = {
 };
 
 function looksLikeBotWall(html) {
-  const h = html.slice(0, 25000).toLowerCase();
+  const h = html.slice(0, 30000).toLowerCase();
   return (
     h.includes("are you a robot") ||
     h.includes("access denied") ||
@@ -33,60 +33,67 @@ function looksLikeBotWall(html) {
   );
 }
 
-// ---------------- ScrapingBee fetch ----------------
+// ---------------- ScrapingBee fetch with auto-fallback ----------------
+async function beeRequest(url, opts) {
+  const qs = new URLSearchParams();
+  qs.set("api_key", opts.apiKey);
+  qs.set("url", url);
+  qs.set("country_code", "us");
+  qs.set("render_js", "true");
+  qs.set("wait", String(opts.wait));
+  if (opts.premium) qs.set("premium_proxy", "true");
+  if (opts.customHeaders) qs.set("custom_headers", JSON.stringify(opts.customHeaders));
+  if (opts.jsScenario) qs.set("js_scenario", JSON.stringify(opts.jsScenario));
+  const api = `https://app.scrapingbee.com/api/v1?${qs.toString()}`;
+
+  const resp = await fetch(api);
+  const html = await resp.text();
+  return { status: resp.status, html };
+}
+
 async function fetchWithBee(url) {
-  const key = process.env.SCRAPINGBEE_API_KEY;
-  if (!key) throw new Error("Missing SCRAPINGBEE_API_KEY");
+  const apiKey = process.env.SCRAPINGBEE_API_KEY;
+  if (!apiKey) throw new Error("Missing SCRAPINGBEE_API_KEY");
 
   const host = U.safeHost(url).toLowerCase();
   const isWayfair = /(^|\.)wayfair\./.test(host);
   const isAmazon  = /(^|\.)amazon\./.test(host);
+  const premium   = String(process.env.SCRAPINGBEE_PREMIUM || "").toLowerCase() === "true";
 
-  // Heavier path for dynamic sites
-  const wait = (isWayfair || isAmazon) ? 6000 : 2500;
-
-  // For Wayfair: click cookie banner and wait for price block or JSON to appear
-  let jsScenario = null;
-  let waitFor = null;
-  if (isWayfair) {
-    jsScenario = [
-      { name: "wait",   args: { wait: 800 } },
-      { name: "click",  args: { selector: "#onetrust-accept-btn-handler", wait_for: 600 } },
-      { name: "scroll", args: { x: 0, y: 800 } },
-      { name: "wait",   args: { wait: 1200 } }
-    ];
-    waitFor = '[data-hbkit-price],#__NEXT_DATA__,script[type="application/ld+json"]';
-  } else if (isAmazon) {
-    // Gentle nudge on Amazon pages too
-    jsScenario = [
-      { name: "wait",   args: { wait: 600 } },
-      { name: "scroll", args: { x: 0, y: 600 } },
-      { name: "wait",   args: { wait: 800 } }
-    ];
-    waitFor = '#corePriceDisplay_desktop_feature_div .a-offscreen, #priceblock_ourprice, #price_inside_buybox, script[type="application/ld+json"]';
-  }
-
-  const qs = new URLSearchParams();
-  qs.set("api_key", key);
-  qs.set("url", url);
-  qs.set("country_code", "us");
-  qs.set("render_js", "true");
-  qs.set("wait", String(wait));
-  if (waitFor) qs.set("wait_for", waitFor);
-  if (jsScenario) qs.set("js_scenario", JSON.stringify(jsScenario));
-  if (String(process.env.SCRAPINGBEE_PREMIUM || "").toLowerCase() === "true") {
-    qs.set("premium_proxy", "true");
-  }
-  // Realistic headers
-  qs.set("custom_headers", JSON.stringify({
+  const headers = {
     "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
     "Accept-Language": "en-US,en;q=0.9"
-  }));
+  };
 
-  const api = `https://app.scrapingbee.com/api/v1?${qs.toString()}`;
-  const resp = await fetch(api);
-  const html = await resp.text();
-  return { html, host, wait, status: resp.status, waitFor, jsScenarioActive: !!jsScenario };
+  // Known-good cookie-accept scenario (no scroll, no wait_for)
+  const scenario =
+    isWayfair
+      ? [
+          { name: "wait",  args: { wait: 900 } },
+          { name: "click", args: { selector: "#onetrust-accept-btn-handler" } },
+          { name: "wait",  args: { wait: 1200 } }
+        ]
+      : isAmazon
+      ? [{ name: "wait", args: { wait: 1000 } }]
+      : null;
+
+  const wait = (isWayfair || isAmazon) ? 6000 : 2500;
+
+  // 1) Try with scenario (if applicable)
+  let usedScenario = !!scenario;
+  let r1 = await beeRequest(url, {
+    apiKey, wait, premium, customHeaders: headers, jsScenario: scenario
+  });
+
+  // 2) If Bee says bad request/blocked (4xx) or HTML looks wrong, retry without scenario, longer wait
+  if (r1.status >= 400 && r1.status < 500) {
+    usedScenario = false;
+    r1 = await beeRequest(url, {
+      apiKey, wait: wait + 2000, premium, customHeaders: headers, jsScenario: null
+    });
+  }
+
+  return { status: r1.status, html: r1.html, host, wait, usedScenario, premium };
 }
 
 // ---------------- Variant extractor ----------------
@@ -101,7 +108,6 @@ function extractVariants(document) {
       .filter(Boolean);
     if (options.length >= 2 && options.length <= 50) out.push({ name: nameGuess, options });
   }
-  // Amazon "twister" (harmless elsewhere)
   const twister = document.querySelector("#twister, #variation_color_name, #variation_size_name");
   if (twister) {
     const labels = Array.from(twister.querySelectorAll("label, span.a-size-base"));
@@ -111,7 +117,7 @@ function extractVariants(document) {
   return out;
 }
 
-// ---------------- Price/title/image extraction ----------------
+// ---------------- Extraction pipeline ----------------
 function extractFromHTML(html, url) {
   const dom = new JSDOM(html);
   const { document } = dom.window;
@@ -147,7 +153,7 @@ function extractFromHTML(html, url) {
     } catch {}
   }
 
-  // 2) Wayfair direct price selector
+  // 2) Wayfair direct selector (common)
   if (!price) {
     const wf = document.querySelector("[data-hbkit-price]");
     if (wf) {
@@ -156,7 +162,7 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 3) Embedded JSON (NEXT_DATA / application/json)
+  // 3) Embedded JSON state (NEXT_DATA / application/json)
   if (!price || !title || !image) {
     const blocks = [];
     const nextData = document.querySelector("#__NEXT_DATA__");
@@ -197,7 +203,7 @@ function extractFromHTML(html, url) {
     }
   }
 
-  // 4) Generic DOM price selectors
+  // 4) Generic DOM selectors
   if (!price) {
     const sels = [
       "#corePriceDisplay_desktop_feature_div .a-offscreen",
@@ -205,10 +211,9 @@ function extractFromHTML(html, url) {
       "#price_inside_buybox",
       "#priceblock_ourprice",
       "#priceblock_dealprice",
-      "[itemprop=price]",
-      'meta[itemprop="price"]',
-      'meta[property="product:price:amount"]',
-      ".price", ".sale-price", ".our-price", "[data-test*='price']", ".c-price"
+      "[itemprop=price]", 'meta[itemprop="price"]', 'meta[property="product:price:amount"]',
+      ".price", ".sale-price", ".our-price", "[data-test*='price']", ".c-price",
+      "span.price", "div.product-price", "#price"
     ];
     for (const sel of sels) {
       const el = document.querySelector(sel);
@@ -235,7 +240,7 @@ function extractFromHTML(html, url) {
     image = U.pick(ogi, link, amzi);
   }
 
-  // 6) Last-resort price sweep
+  // 6) Last-resort price regex
   if (!price) {
     const rx = /(USD\s*)?\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|[0-9]+(?:\.[0-9]{2}))/gi;
     let best = null, m;
@@ -288,21 +293,23 @@ function roundTo95(n) {
 
 // ---------------- Routes ----------------
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha-3-wayfair-click" });
+  res.json({ ok: true, version: "alpha-3-wayfair-fallback" });
 });
 
 app.post("/extractProduct", async (req, res) => {
   try {
     const { url } = req.body || {};
     if (!url) return res.status(400).json({ ok:false, error:"Missing url" });
+
     const fetched = await fetchWithBee(url);
     const botWall = looksLikeBotWall(fetched.html);
     const product = extractFromHTML(fetched.html, url);
+
     res.json({
       ok: true,
       url,
       ...product,
-      used: { host: fetched.host, wait: fetched.wait, status: fetched.status, waitFor: fetched.waitFor || null, jsScenarioActive: fetched.jsScenarioActive || false },
+      used: { host: fetched.host, status: fetched.status, wait: fetched.wait, jsScenarioActive: fetched.usedScenario, premium: fetched.premium },
       botWall: botWall || undefined
     });
   } catch (e) {
@@ -361,7 +368,7 @@ app.post("/quote", async (req, res) => {
         (category.includes("upholster") ? DEFAULT_DUTY_UPHOLSTERED : 0.0);
       const taxExempt = Boolean(it.taxExempt);
 
-      const usTax = taxExempt ? 0 : firstCost * DEFAULT_US_SALES_TAX;
+      const usTax = taxExempt ? 0 : firstCost * 0.06625;
       const freight = volumeFt3 * DEFAULT_FREIGHT_PER_FT3;
       const fixedFee = perUnitFixedFee;
       const duty = firstCost * dutyRate;
@@ -370,7 +377,7 @@ app.post("/quote", async (req, res) => {
       const cap = capByLanded(landedPerUnit);
       const marginRate = Math.min(volTierMargin, cap);
       const retailPreCard = landedPerUnit * (1 + marginRate);
-      const retailWithCard = retailPreCard * (1 + CARD_FEE_RATE);
+      const retailWithCard = retailPreCard * (1 + 0.0325);
       const retail = roundTo95(retailWithCard);
       const total = retail * qty;
 
@@ -396,7 +403,7 @@ app.post("/quote", async (req, res) => {
 
     res.json({
       ok: true,
-      version: "alpha-3-wayfair-click",
+      version: "alpha-3-wayfair-fallback",
       totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) },
       lines
     });
@@ -406,7 +413,7 @@ app.post("/quote", async (req, res) => {
   }
 });
 
-// Shopify draft order
+// ---------------- Shopify draft order ----------------
 app.post("/shopify/draft", async (req, res) => {
   try {
     const shop = process.env.SHOPIFY_SHOP;
