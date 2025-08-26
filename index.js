@@ -1,9 +1,8 @@
-// SDL Instant Import — "Instant Import 5 + WF Plus v2 + CORS harden"
-// Endpoints: /health, /extractProduct, /quote, /shopify/draft
-// Scraper: render_js + long wait (no js_scenario)
+// SDL Instant Import — stable backend (CORS + extractor + quote + draft)
+// Version: alpha-3-cors-stable
 // Env required: SCRAPINGBEE_API_KEY
 // Optional: SCRAPINGBEE_PREMIUM=true
-// Optional: SHOPIFY_SHOP=yourstore.myshopify.com, SHOPIFY_ACCESS_TOKEN=shpat_xxx
+// Optional: SHOPIFY_SHOP, SHOPIFY_ACCESS_TOKEN
 
 const express = require("express");
 const { JSDOM } = require("jsdom");
@@ -11,174 +10,116 @@ const { JSDOM } = require("jsdom");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-/* ---------- CORS: answer ALL preflights ---------- */
-app.use((req, res, next) => {
-  // Allow your public frontend and any preview; use "*" since no cookies are sent
+/* ---------- CORS: allow all origins (no cookies used) ---------- */
+app.use(function (req, res, next) {
   res.header("Access-Control-Allow-Origin", "*");
   res.header("Vary", "Origin");
   res.header("Access-Control-Allow-Methods", "GET,POST,OPTIONS");
   res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-  // short-circuit preflights
   if (req.method === "OPTIONS") return res.sendStatus(204);
   next();
 });
 
-/* ---------- JSON body ---------- */
 app.use(express.json({ limit: "2mb" }));
 
 /* ---------- Utils ---------- */
-const U = {
-  safeHost(u) { try { return new URL(u).hostname; } catch { return ""; } },
-  parsePrice(s) { const n = parseFloat(String(s).replace(/[^\d.]/g, "")); return isFinite(n) ? n : 0; },
-  pick(...vals) { for (const v of vals) if (v != null && String(v).trim() !== "") return v; return null; },
-  slugTitle(u) { try {
-      const seg = (new URL(u).pathname || "").split("/").filter(Boolean).pop() || "";
-      const cleaned = seg.replace(/[-_]+/g, " ").replace(/\b(pdp|html|w\d+)\b/gi, "").trim();
-      return cleaned && /[a-z]/i.test(cleaned) ? cleaned : null;
-    } catch { return null; }
-};
-
-function looksLikeBotWall(html) {
-  const h = html.slice(0, 120_000).toLowerCase();
-  return h.includes("are you a robot") || h.includes("access denied") || h.includes("/captcha");
+function safeHost(u) { try { return new URL(u).hostname; } catch (e) { return ""; } }
+function parsePrice(s) {
+  const n = parseFloat(String(s).replace(/[^\d.]/g, ""));
+  return isFinite(n) ? n : 0;
+}
+function pick() {
+  for (var i = 0; i < arguments.length; i++) {
+    var v = arguments[i];
+    if (v != null && String(v).trim() !== "") return v;
+  }
+  return null;
+}
+function slugTitle(u) {
+  try {
+    var path = new URL(u).pathname || "";
+    var segs = path.split("/").filter(Boolean);
+    var last = segs.length ? segs[segs.length - 1] : "";
+    var cleaned = last.replace(/[-_]+/g, " ").replace(/\b(pdp|html|w\d+)\b/gi, "").trim();
+    return cleaned && /[a-z]/i.test(cleaned) ? cleaned : null;
+  } catch (e) { return null; }
 }
 
-/* ---------- ScrapingBee (render_js + long wait) ---------- */
-async function beeGet(url, { apiKey, wait, premium, headers }) {
-  const qs = new URLSearchParams();
-  qs.set("api_key", apiKey);
+/* ---------- ScrapingBee fetch (simple: render_js + wait) ---------- */
+async function beeGet(url, opts) {
+  var qs = new URLSearchParams();
+  qs.set("api_key", opts.apiKey);
   qs.set("url", url);
   qs.set("country_code", "us");
   qs.set("render_js", "true");
-  qs.set("wait", String(wait));
+  qs.set("wait", String(opts.wait));
   qs.set("block_resources", "false");
-  if (premium) qs.set("premium_proxy", "true");
-  if (headers) qs.set("custom_headers", JSON.stringify(headers));
-  const api = `https://app.scrapingbee.com/api/v1?${qs.toString()}`;
-
-  const resp = await fetch(api);
-  const html = await resp.text();
-  return { status: resp.status, html };
+  if (opts.premium) qs.set("premium_proxy", "true");
+  if (opts.headers) qs.set("custom_headers", JSON.stringify(opts.headers));
+  var api = "https://app.scrapingbee.com/api/v1?" + qs.toString();
+  var resp = await fetch(api);
+  var html = await resp.text();
+  return { status: resp.status, html: html };
 }
 
 async function fetchWithBee(url) {
-  const apiKey = process.env.SCRAPINGBEE_API_KEY;
+  var apiKey = process.env.SCRAPINGBEE_API_KEY;
   if (!apiKey) throw new Error("Missing SCRAPINGBEE_API_KEY");
 
-  const host = U.safeHost(url).toLowerCase();
-  const isWayfair = /(^|\.)wayfair\./.test(host);
-  const isAmazon  = /(^|\.)amazon\./.test(host);
-  const premium   = String(process.env.SCRAPINGBEE_PREMIUM || "").toLowerCase() === "true";
+  var host = safeHost(url).toLowerCase();
+  var isWayfair = /(^|\.)wayfair\./.test(host);
+  var isAmazon = /(^|\.)amazon\./.test(host);
+  var premium = String(process.env.SCRAPINGBEE_PREMIUM || "").toLowerCase() === "true";
 
-  const wait = (isWayfair || isAmazon) ? 9000 : 4500;
-  const headers = {
+  var wait = (isWayfair || isAmazon) ? 8000 : 4500;
+  var headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:115.0) Gecko/20100101 Firefox/115.0",
     "Accept-Language": "en-US,en;q=0.9"
   };
 
-  let r = await beeGet(url, { apiKey, wait, premium, headers });
+  var r = await beeGet(url, { apiKey: apiKey, wait: wait, premium: premium, headers: headers });
   if (r.status >= 400 && r.status < 500) {
-    r = await beeGet(url, { apiKey, wait: wait + 3000, premium, headers });
+    r = await beeGet(url, { apiKey: apiKey, wait: wait + 3000, premium: premium, headers: headers });
   }
-  return { status: r.status, html: r.html, host, wait, premium };
+  return { status: r.status, html: r.html, host: host, wait: wait, premium: premium };
 }
 
 /* ---------- Variants ---------- */
 function extractVariants(document) {
-  const out = [];
-  const selects = Array.from(document.querySelectorAll("select"));
-  for (const sel of selects) {
-    const labelEl = sel.closest("label") || sel.previousElementSibling;
-    const nameGuess = (labelEl?.textContent || sel.name || sel.id || "Option").trim();
-    const options = Array.from(sel.querySelectorAll("option"))
-      .map(o => (o.textContent || "").trim())
-      .filter(Boolean);
-    if (options.length >= 2 && options.length <= 50) out.push({ name: nameGuess, options });
-  }
-  const twister = document.querySelector("#twister, #variation_color_name, #variation_size_name");
+  var out = [];
+  var selects = Array.from(document.querySelectorAll("select"));
+  selects.forEach(function (sel) {
+    var labelEl = sel.closest("label") || sel.previousElementSibling;
+    var nameGuess = (labelEl && labelEl.textContent ? labelEl.textContent : (sel.name || sel.id || "Option")).trim();
+    var options = Array.from(sel.querySelectorAll("option")).map(function (o) { return (o.textContent || "").trim(); }).filter(Boolean);
+    if (options.length >= 2 && options.length <= 50) out.push({ name: nameGuess, options: options });
+  });
+  // Amazon-style variants (harmless elsewhere)
+  var twister = document.querySelector("#twister, #variation_color_name, #variation_size_name");
   if (twister) {
-    const labels = Array.from(twister.querySelectorAll("label, span.a-size-base"));
-    const textOpts = labels.map(x => (x.textContent || "").trim()).filter(Boolean);
-    if (textOpts.length > 1) out.push({ name: "Variant", options: textOpts });
+    var labels = Array.from(twister.querySelectorAll("label, span.a-size-base")).map(function (x) { return (x.textContent || "").trim(); }).filter(Boolean);
+    if (labels.length > 1) out.push({ name: "Variant", options: labels });
   }
   return out;
 }
 
-/* ---------- Aggressive JSON miner ---------- */
-function mineJsonAggressively(html, document) {
-  const blocks = [];
-  const nextData = document.querySelector("#__NEXT_DATA__");
-  if (nextData?.textContent) blocks.push(nextData.textContent);
-  const appJson = Array.from(document.querySelectorAll('script[type="application/json"]'));
-  for (const s of appJson) if (s.textContent) blocks.push(s.textContent);
-  const matches = html.match(/<script[^>]*type=["']application\/json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
-  for (const blk of matches) {
-    const body = blk.replace(/^.*?>/s, "").replace(/<\/script>$/i, "");
-    blocks.push(body);
-  }
-
-  const titleSet = new Set();
-  const imageSet = new Set();
-  const priceSet = new Set();
-
-  function pushTitle(v) { if (!v) return; const s = String(v).trim(); if (s) titleSet.add(s); }
-  function pushImage(v) { if (!v) return; const s = String(v).trim(); if (/^https?:\/\//i.test(s)) imageSet.add(s); }
-  function pushPrice(v) { const n = U.parsePrice(v); if (n > 0) priceSet.add(n); }
-
-  const titleKeys = ["title","name","productTitle","seoTitle"];
-  const imageKeys = ["image","imageUrl","primaryImage","hiRes","src","url","ogImage"];
-  const priceKeys = ["price","formattedPrice","displayPrice","currentPrice","priceAmount","amount","value","sellingPrice","salePrice","listPrice","buyBoxPrice","lowPrice","highPrice"];
-
-  for (const body of blocks) {
-    try {
-      const obj = JSON.parse(body);
-      const stack = [obj];
-      let steps = 0;
-      while (stack.length && steps++ < 600000) {
-        const cur = stack.pop();
-        if (!cur || typeof cur !== "object") continue;
-
-        for (const k of titleKeys) if (k in cur) pushTitle(cur[k]);
-        for (const k of imageKeys) if (k in cur) pushImage(cur[k]);
-        for (const k of priceKeys) if (k in cur) pushPrice(cur[k]);
-
-        if (cur?.product?.title) pushTitle(cur.product.title);
-        if (cur?.product?.name)  pushTitle(cur.product.name);
-        if (cur?.product?.images?.[0]?.url) pushImage(cur.product.images[0].url);
-        if (cur?.pricing?.price) pushPrice(cur.pricing.price);
-        if (cur?.priceInfo?.currentPrice) pushPrice(cur.priceInfo.currentPrice);
-        if (cur?.offers?.price) pushPrice(cur.offers.price);
-        if (cur?.offers?.priceAmount) pushPrice(cur.offers.priceAmount);
-
-        if (Array.isArray(cur)) for (const v of cur) stack.push(v);
-        else for (const v of Object.values(cur)) stack.push(v);
-      }
-    } catch {}
-  }
-
-  const title = [...titleSet].find(s => s.length > 8) || [...titleSet][0] || null;
-  const image = [...imageSet][0] || null;
-  const price = [...priceSet].sort((a,b)=>a-b)[0] || 0;
-  return { title, image, price, counts: { titles: titleSet.size, images: imageSet.size, prices: priceSet.size } };
-}
-
-/* ---------- Extraction pipeline ---------- */
+/* ---------- Extraction ---------- */
 function extractFromHTML(html, url) {
-  const dom = new JSDOM(html);
-  const { document } = dom.window;
+  var dom = new JSDOM(html);
+  var document = dom.window.document;
 
-  let title = null, image = null, price = null, currency = null, source = "none";
-  const signals = { mined: null, selectorHit: null };
+  var title = null, image = null, price = null, currency = null, source = "none";
 
   // 1) JSON-LD Product
-  const ldScripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
-  for (const s of ldScripts) {
+  var ldScripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
+  for (var i = 0; i < ldScripts.length; i++) {
     try {
-      const json = JSON.parse(s.textContent || "{}");
-      const arr = Array.isArray(json) ? json : [json];
-      for (const node of arr) {
+      var json = JSON.parse(ldScripts[i].textContent || "{}");
+      var arr = Array.isArray(json) ? json : [json];
+      for (var j = 0; j < arr.length; j++) {
+        var node = arr[j];
         if (!node || typeof node !== "object") continue;
-        const isProduct = String(node["@type"] || "").toLowerCase().includes("product") || node.offers;
+        var isProduct = (String(node["@type"] || "").toLowerCase().indexOf("product") >= 0) || node.offers;
         if (isProduct) {
           title = node.name || title;
           if (!image) {
@@ -186,40 +127,83 @@ function extractFromHTML(html, url) {
             else if (typeof node.image === "string") image = node.image || null;
           }
           if (!price && node.offers) {
-            const offers = Array.isArray(node.offers) ? node.offers[0] : node.offers;
-            let p = offers?.price ?? offers?.lowPrice ?? offers?.highPrice ?? null;
-            if (typeof p === "string") p = U.parsePrice(p);
+            var offers = Array.isArray(node.offers) ? node.offers[0] : node.offers;
+            var p = offers && (offers.price || offers.lowPrice || offers.highPrice);
+            if (typeof p === "string") p = parsePrice(p);
             if (isFinite(p)) price = Number(p);
-            currency = offers?.priceCurrency || currency;
+            currency = offers && offers.priceCurrency || currency;
             source = "jsonld";
           }
         }
       }
       if (title || image || price) break;
-    } catch {}
+    } catch (e) {}
   }
 
   // 2) Wayfair direct selector
   if (!price) {
-    const wf = document.querySelector("[data-hbkit-price]");
+    var wf = document.querySelector("[data-hbkit-price]");
     if (wf) {
-      const p = U.parsePrice(wf.getAttribute("data-hbkit-price"));
-      if (p > 0) { price = p; source = "selector:[data-hbkit-price]"; signals.selectorHit = "[data-hbkit-price]"; }
+      var wp = parsePrice(wf.getAttribute("data-hbkit-price"));
+      if (wp > 0) { price = wp; source = "selector:[data-hbkit-price]"; }
     }
   }
 
-  // 3) Deep JSON mining
+  // 3) Embedded JSON state (NEXT_DATA + application/json)
   if (!price || !title || !image) {
-    const mined = mineJsonAggressively(html, document);
-    signals.mined = mined.counts;
-    if (!title && mined.title) title = mined.title;
-    if (!image && mined.image) image = mined.image;
-    if (!price && mined.price > 0) { price = mined.price; source = source === "none" ? "json-miner" : source; }
+    var blocks = [];
+    var nextData = document.querySelector("#__NEXT_DATA__");
+    if (nextData && nextData.textContent) blocks.push(nextData.textContent);
+    var appJson = Array.from(document.querySelectorAll('script[type="application/json"]'));
+    appJson.forEach(function (s) { if (s.textContent) blocks.push(s.textContent); });
+    var matches = html.match(/<script[^>]*type=["']application\/json["'][^>]*>[\s\S]*?<\/script>/gi) || [];
+    matches.forEach(function (blk) {
+      var body = blk.replace(/^.*?>/s, "").replace(/<\/script>$/i, "");
+      blocks.push(body);
+    });
+
+    function scanObj(obj) {
+      var stack = [obj];
+      var safety = 0;
+      while (stack.length && safety++ < 300000) {
+        var cur = stack.pop();
+        if (!cur || typeof cur !== "object") continue;
+
+        if (!title) {
+          if (cur.title) title = String(cur.title);
+          else if (cur.name) title = String(cur.name);
+        }
+        if (!image) {
+          if (cur.image && typeof cur.image === "string") image = cur.image;
+          else if (cur.imageUrl) image = cur.imageUrl;
+          else if (cur.primaryImage) image = cur.primaryImage;
+          else if (cur.url && /^https?:\/\//i.test(cur.url) && /\.(jpg|jpeg|png|webp|gif)(\?|$)/i.test(cur.url)) image = cur.url;
+        }
+        if (!price) {
+          var keys = ["price","formattedPrice","displayPrice","currentPrice","priceAmount","amount","value","sellingPrice","salePrice","listPrice","buyBoxPrice","lowPrice","highPrice"];
+          for (var k = 0; k < keys.length; k++) {
+            var key = keys[k];
+            if (cur.hasOwnProperty(key)) {
+              var n = parsePrice(cur[key]);
+              if (n > 0) { price = n; break; }
+            }
+          }
+        }
+
+        if (Array.isArray(cur)) for (var a = 0; a < cur.length; a++) stack.push(cur[a]);
+        else for (var v in cur) if (cur.hasOwnProperty(v)) stack.push(cur[v]);
+      }
+    }
+
+    for (var b = 0; b < blocks.length; b++) {
+      try { scanObj(JSON.parse(blocks[b])); } catch (e) {}
+      if (title && (image || price)) break;
+    }
   }
 
   // 4) Generic DOM selectors
   if (!price) {
-    const sels = [
+    var sels = [
       "#corePriceDisplay_desktop_feature_div .a-offscreen",
       "#corePrice_feature_div .a-offscreen",
       "#price_inside_buybox",
@@ -229,65 +213,65 @@ function extractFromHTML(html, url) {
       ".price", ".sale-price", ".our-price", "[data-test*='price']", ".c-price",
       "span.price", "div.product-price", "#price"
     ];
-    for (const sel of sels) {
-      const el = document.querySelector(sel);
+    for (var si = 0; si < sels.length; si++) {
+      var el = document.querySelector(sels[si]);
       if (!el) continue;
-      const txt = el.getAttribute("content") || el.textContent || "";
-      const p = U.parsePrice(txt);
-      if (p > 0) { price = p; if (source === "none") source = `selector:${sel}`; signals.selectorHit = sel; break; }
+      var txt = el.getAttribute && el.getAttribute("content") ? el.getAttribute("content") : (el.textContent || "");
+      var n2 = parsePrice(txt);
+      if (n2 > 0) { price = n2; break; }
     }
   }
 
-  // 5) Title/Image fallbacks (OG/Twitter/meta)
+  // 5) Title/Image fallbacks
   if (!title) {
-    const og  = document.querySelector('meta[property="og:title"]')?.getAttribute("content");
-    const twt = document.querySelector('meta[name="twitter:title"]')?.getAttribute("content");
-    const h1  = document.querySelector("h1")?.textContent;
-    const amz = document.querySelector("#productTitle")?.textContent;
-    const t   = document.querySelector("title")?.textContent;
-    title = (U.pick(amz, og, twt, h1, t) || "").trim() || U.slugTitle(url);
+    var og = document.querySelector('meta[property="og:title"]');
+    var twt = document.querySelector('meta[name="twitter:title"]');
+    var h1 = document.querySelector("h1");
+    var amz = document.querySelector("#productTitle");
+    var ttag = document.querySelector("title");
+    title = (pick(amz && amz.textContent, og && og.getAttribute("content"), twt && twt.getAttribute("content"), h1 && h1.textContent, ttag && ttag.textContent) || "").trim() || slugTitle(url);
   }
   if (!image) {
-    const ogi  = document.querySelector('meta[property="og:image"]')?.getAttribute("content");
-    const twi  = document.querySelector('meta[name="twitter:image"]')?.getAttribute("content");
-    const link = document.querySelector('link[rel="image_src"]')?.getAttribute("href");
-    const amzi = document.querySelector("#landingImage")?.getAttribute("data-old-hires")
-               || document.querySelector("#imgTagWrapperId img")?.getAttribute("src");
-    image = U.pick(ogi, twi, link, amzi);
+    var ogi = document.querySelector('meta[property="og:image"]');
+    var twi = document.querySelector('meta[name="twitter:image"]');
+    var link = document.querySelector('link[rel="image_src"]');
+    var amzi = document.querySelector("#landingImage");
+    var img2 = document.querySelector("#imgTagWrapperId img");
+    image = pick(ogi && ogi.getAttribute("content"), twi && twi.getAttribute("content"), link && link.getAttribute("href"),
+      (amzi && amzi.getAttribute("data-old-hires")) || (img2 && img2.getAttribute("src")));
   }
 
   // 6) Last-resort price regex
   if (!price) {
-    const rx = /(USD\s*)?\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|[0-9]+(?:\.[0-9]{2}))/gi;
-    let best = null, m;
+    var rx = /(USD\s*)?\$?\s*([0-9]{1,3}(?:,[0-9]{3})*(?:\.[0-9]{2})|[0-9]+(?:\.[0-9]{2}))/gi;
+    var best = null, m;
     while ((m = rx.exec(html)) !== null) {
-      const n = U.parsePrice(m[0]);
-      if (n >= 5 && (!best || n < best)) best = n;
+      var n3 = parsePrice(m[0]);
+      if (n3 >= 5 && (!best || n3 < best)) best = n3;
     }
-    if (best) { price = best; if (source === "none") source = "regex"; }
+    if (best) price = best;
   }
 
-  let vendor = null;
-  try { vendor = new URL(url).hostname.replace(/^www\./, ""); } catch {}
+  var vendor = null;
+  try { vendor = new URL(url).hostname.replace(/^www\./, ""); } catch (e) {}
 
   return {
     title: title || null,
     image: image || null,
     price: isFinite(price) ? Number(price) : 0,
     currency: currency || null,
-    vendor,
-    variants: extractVariants(document),
-    debug: { source, signals }
+    vendor: vendor,
+    variants: extractVariants(document)
   };
 }
 
 /* ---------- Quote rules ---------- */
-const DEFAULT_US_SALES_TAX = 0.06625;
-const DEFAULT_FREIGHT_PER_FT3 = 6.00;
-const CARD_FEE_RATE = 0.0325;
-const DEFAULT_DUTY_UPHOLSTERED = 0.25;
-const DEFAULT_VOLUME_FT3 = 11.33;
-const FIXED_FEES_PER_SHIPMENT = 0;
+var DEFAULT_US_SALES_TAX = 0.06625;
+var DEFAULT_FREIGHT_PER_FT3 = 6.00;
+var CARD_FEE_RATE = 0.0325;
+var DEFAULT_DUTY_UPHOLSTERED = 0.25;
+var DEFAULT_VOLUME_FT3 = 11.33;
+var FIXED_FEES_PER_SHIPMENT = 0;
 
 function marginByVolume(ft3) {
   if (ft3 < 10) return 0.40;
@@ -302,107 +286,87 @@ function capByLanded(landed) {
   return 1.0;
 }
 function roundTo95(n) {
-  const rounded = Math.round(n / 0.05) * 0.05;
-  const dollars = Math.floor(rounded);
+  var rounded = Math.round(n / 0.05) * 0.05;
+  var dollars = Math.floor(rounded);
   return Number((dollars + 0.95).toFixed(2));
 }
 
 /* ---------- Routes ---------- */
-app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha-3-merged-wfplus-2-cors" });
+app.get(["/", "/health"], function (_req, res) {
+  res.json({ ok: true, version: "alpha-3-cors-stable" });
 });
 
-app.post("/extractProduct", async (req, res) => {
+app.post("/extractProduct", async function (req, res) {
   try {
-    const { url } = req.body || {};
-    if (!url) return res.status(400).json({ ok:false, error:"Missing url" });
-
-    const fetched = await fetchWithBee(url);
-    const botWall = looksLikeBotWall(fetched.html);
-    const product = extractFromHTML(fetched.html, url);
-
-    res.json({
-      ok: true,
-      url,
-      ...product,
-      used: { host: fetched.host, status: fetched.status, wait: fetched.wait, premium: fetched.premium },
-      botWall: botWall || undefined
-    });
+    var url = (req.body && req.body.url) || "";
+    if (!url) return res.status(400).json({ ok: false, error: "Missing url" });
+    var fetched = await fetchWithBee(url);
+    var product = extractFromHTML(fetched.html, url);
+    res.json({ ok: true, url: url, used: { host: fetched.host, status: fetched.status, wait: fetched.wait, premium: fetched.premium }, ...product });
   } catch (e) {
-    res.status(500).json({ ok:false, error:String(e.message || e) });
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
-app.post("/quote", async (req, res) => {
+app.post("/quote", async function (req, res) {
   try {
-    const body = req.body || {};
-    const items = Array.isArray(body.items) ? body.items : [];
-    if (!items.length) return res.status(400).json({ ok:false, error:"No items provided." });
+    var items = Array.isArray(req.body && req.body.items) ? req.body.items : [];
+    if (!items.length) return res.status(400).json({ ok: false, error: "No items provided." });
 
-    const resolved = await Promise.all(items.map(async (it) => {
-      const out = { ...it };
-      const fc = Number(out.firstCost);
-      const need = !(isFinite(fc) && fc > 0) && typeof out.link === "string" && out.link.length > 4;
+    var resolved = await Promise.all(items.map(async function (it) {
+      var out = Object.assign({}, it);
+      var fc = Number(out.firstCost);
+      var need = !(isFinite(fc) && fc > 0) && typeof out.link === "string" && out.link.length > 4;
       if (need) {
         try {
-          const fetched = await fetchWithBee(out.link);
-          const prod = extractFromHTML(fetched.html, out.link);
-          if (isFinite(prod.price) && prod.price > 0) {
-            out.firstCost = Number(prod.price);
-            out._product = prod;
-            out._scrapeOk = true;
-          } else {
-            out._product = prod;
-            out._scrapeOk = false;
-          }
-        } catch (e) {
-          out._scrapeOk = false;
-          out._scrapeError = String(e.message || e);
-        }
+          var fetched = await fetchWithBee(out.link);
+          var prod = extractFromHTML(fetched.html, out.link);
+          if (isFinite(prod.price) && prod.price > 0) { out.firstCost = Number(prod.price); out._product = prod; out._scrapeOk = true; }
+          else { out._product = prod; out._scrapeOk = false; }
+        } catch (e) { out._scrapeOk = false; out._scrapeError = String(e.message || e); }
       }
       return out;
     }));
 
-    const totalFt3 = resolved.reduce((sum, it) => {
-      const qty = Number(it.qty) || 1;
-      const v = isFinite(it.volumeFt3) ? Number(it.volumeFt3) : DEFAULT_VOLUME_FT3;
-      return sum + v * qty;
+    var totalFt3 = resolved.reduce(function (s, it) {
+      var qty = Number(it.qty) || 1;
+      var v = isFinite(it.volumeFt3) ? Number(it.volumeFt3) : DEFAULT_VOLUME_FT3;
+      return s + v * qty;
     }, 0);
 
-    const volMargin = marginByVolume(totalFt3);
-    const totalQty = resolved.reduce((s, it) => s + (Number(it.qty) || 1), 0);
-    const perUnitFixed = totalQty > 0 ? (FIXED_FEES_PER_SHIPMENT / totalQty) : 0;
+    var volMargin = marginByVolume(totalFt3);
+    var totalQty = resolved.reduce(function (s, it) { return s + (Number(it.qty) || 1); }, 0);
+    var perUnitFixed = totalQty > 0 ? (FIXED_FEES_PER_SHIPMENT / totalQty) : 0;
 
-    const lines = resolved.map((it) => {
-      const name = it.name || (it._product?.title || "Item");
-      const qty = Number(it.qty) || 1;
-      const firstCost = Math.max(0, Number(it.firstCost) || 0);
-      const volumeFt3 = isFinite(it.volumeFt3) ? Number(it.volumeFt3) : DEFAULT_VOLUME_FT3;
+    var lines = resolved.map(function (it) {
+      var name = it.name || (it._product && it._product.title) || "Item";
+      var qty = Number(it.qty) || 1;
+      var firstCost = Math.max(0, Number(it.firstCost) || 0);
+      var volumeFt3 = isFinite(it.volumeFt3) ? Number(it.volumeFt3) : DEFAULT_VOLUME_FT3;
 
-      const category = (it.category || "").toLowerCase();
-      const dutyRate = isFinite(it.dutyRate) ? Number(it.dutyRate) :
-        (category.includes("upholster") ? DEFAULT_DUTY_UPHOLSTERED : 0.0);
-      const taxExempt = Boolean(it.taxExempt);
+      var category = (it.category || "").toLowerCase();
+      var dutyRate = isFinite(it.dutyRate) ? Number(it.dutyRate) : (category.indexOf("upholster") >= 0 ? DEFAULT_DUTY_UPHOLSTERED : 0.0);
+      var taxExempt = Boolean(it.taxExempt);
 
-      const usTax = taxExempt ? 0 : firstCost * DEFAULT_US_SALES_TAX;
-      const freight = volumeFt3 * DEFAULT_FREIGHT_PER_FT3;
-      const fixedFee = perUnitFixed;
-      const duty = firstCost * dutyRate;
+      var usTax = taxExempt ? 0 : firstCost * DEFAULT_US_SALES_TAX;
+      var freight = volumeFt3 * DEFAULT_FREIGHT_PER_FT3;
+      var fixedFee = perUnitFixed;
+      var duty = firstCost * dutyRate;
 
-      const landed = firstCost + usTax + freight + fixedFee + duty;
-      const marginRate = Math.min(volMargin, capByLanded(landed));
-      const retail = roundTo95(landed * (1 + marginRate) * (1 + CARD_FEE_RATE));
-      const total = retail * qty;
+      var landed = firstCost + usTax + freight + fixedFee + duty;
+      var marginRate = Math.min(volMargin, capByLanded(landed));
+      var retail = roundTo95(landed * (1 + marginRate) * (1 + CARD_FEE_RATE));
+      var total = retail * qty;
 
       return {
-        name,
+        name: name,
         link: it.link || null,
-        qty,
-        firstCost,
-        volumeFt3,
-        image: it._product?.image || null,
-        vendor: it._product?.vendor || (it.link ? U.safeHost(it.link).replace(/^www\./,"") : null),
-        variants: it._product?.variants || [],
+        qty: qty,
+        firstCost: firstCost,
+        volumeFt3: volumeFt3,
+        image: (it._product && it._product.image) || null,
+        vendor: (it._product && it._product.vendor) || (it.link ? safeHost(it.link).replace(/^www\./, "") : null),
+        variants: (it._product && it._product.variants) || [],
         retailUnit: Number(retail.toFixed(2)),
         retailTotal: Number(total.toFixed(2)),
         scraped: Boolean(it._product),
@@ -411,66 +375,63 @@ app.post("/quote", async (req, res) => {
       };
     });
 
-    const grandTotal = lines.reduce((s, r) => s + r.retailTotal, 0);
-    res.json({
-      ok: true,
-      version: "alpha-3-merged-wfplus-2-cors",
-      totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) },
-      lines
-    });
+    var grandTotal = lines.reduce(function (s, r) { return s + r.retailTotal; }, 0);
+    res.json({ ok: true, version: "alpha-3-cors-stable", totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) }, lines: lines });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ ok:false, error:"Server error." });
+    res.status(500).json({ ok: false, error: "Server error." });
   }
 });
 
-app.post("/shopify/draft", async (req, res) => {
+app.post("/shopify/draft", async function (req, res) {
   try {
-    const shop = process.env.SHOPIFY_SHOP;
-    const token = process.env.SHOPIFY_ACCESS_TOKEN;
-    if (!shop || !token) return res.status(500).json({ ok:false, error:"Shopify env vars missing" });
+    var shop = process.env.SHOPIFY_SHOP;
+    var token = process.env.SHOPIFY_ACCESS_TOKEN;
+    if (!shop || !token) return res.status(500).json({ ok: false, error: "Shopify env vars missing" });
 
-    const { items, customerEmail, note } = req.body || {};
-    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ ok:false, error:"No items" });
+    var body = req.body || {};
+    var items = Array.isArray(body.items) ? body.items : [];
+    if (!items.length) return res.status(400).json({ ok: false, error: "No items" });
 
-    const line_items = items.map(it => ({
-      title: it.name || "Special Order — Customer Provided Link",
-      quantity: Number(it.qty) || 1,
-      price: Number(it.unitPrice) || undefined,
-      properties: [
-        it.link ? { name: "Source Link", value: it.link } : null,
-        it.image ? { name: "Image", value: it.image } : null,
-        it.vendor ? { name: "Vendor", value: it.vendor } : null,
-        ...(Array.isArray(it.variantSelections) ? it.variantSelections.map(v => ({ name: v.name, value: v.value })) : [])
-      ].filter(Boolean)
-    }));
+    var line_items = items.map(function (it) {
+      var props = [];
+      if (it.link) props.push({ name: "Source Link", value: it.link });
+      if (it.image) props.push({ name: "Image", value: it.image });
+      if (it.vendor) props.push({ name: "Vendor", value: it.vendor });
+      if (Array.isArray(it.variantSelections)) {
+        it.variantSelections.forEach(function (v) { props.push({ name: v.name, value: v.value }); });
+      }
+      return {
+        title: it.name || "Special Order — Customer Provided Link",
+        quantity: Number(it.qty) || 1,
+        price: Number(it.unitPrice) || undefined,
+        properties: props
+      };
+    });
 
-    const payload = {
+    var payload = {
       draft_order: {
-        line_items,
-        email: customerEmail || undefined,
+        line_items: line_items,
+        email: body.customerEmail || undefined,
         tags: "Special Order,Instant Import",
-        note: note || "Instant Import draft order created automatically.",
+        note: body.note || "Instant Import draft order created automatically.",
         use_customer_default_address: true
       }
     };
 
-    const url = `https://${shop}/admin/api/2024-07/draft_orders.json`;
-    const resp = await fetch(url, {
+    var url = "https://" + shop + "/admin/api/2024-07/draft_orders.json";
+    var resp = await fetch(url, {
       method: "POST",
       headers: { "X-Shopify-Access-Token": token, "Content-Type": "application/json" },
       body: JSON.stringify(payload)
     });
-    const data = await resp.json();
-    if (!resp.ok) return res.status(500).json({ ok:false, error:"Shopify error", detail:data });
-    res.json({ ok:true, draft_order: data.draft_order });
+    var data = await resp.json();
+    if (!resp.ok) return res.status(500).json({ ok: false, error: "Shopify error", detail: data });
+    res.json({ ok: true, draft_order: data.draft_order });
   } catch (e) {
-    res.status(500).json({ ok:false, error:String(e.message || e) });
+    res.status(500).json({ ok: false, error: String(e.message || e) });
   }
 });
 
-app.listen(PORT, () => {
-  console.log(`Backend running on :${PORT}`);
+app.listen(PORT, function () {
+  console.log("Backend running on :" + PORT);
 });
-
-                           
