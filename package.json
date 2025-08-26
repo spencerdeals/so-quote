@@ -1,16 +1,15 @@
 {
-  "name": "so-quote-alpha3-stepper",
+  "name": "sdl-backend-ping",
   "version": "1.0.0",
-  "description": "SDL Instant Import — #alpha v3 backend (ScrapingBee + ProductExtract + Shopify Draft + Stepper flow)",
+  "description": "SDL Instant Import — ping backend",
   "main": "index.js",
   "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
     "express": "^4.19.2",
-    "jsdom": "^24.0.0"
+    "cors": "^2.8.5"
   },
   "engines": {
     "node": ">=18"
