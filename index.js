@@ -1,13 +1,14 @@
-// #alpha build — v3 FULL (Instant Import)
-// Features:
+// #alpha build — v3 FULL (Instant Import, Stepper + Shopify Draft)
+// Endpoints:
 // - /health, /debug-index
-// - /scrape            → raw HTML via ScrapingBee
-// - /extractPrice      → price only
-// - /extractProduct    → title, price, images, variants (JSON-LD + heuristics; Amazon + Wayfair aware)
-// - /quote             → calculator with SDL margins; auto-scrapes price if missing
+// - /scrape, /extractPrice, /extractProduct
+// - /quote
+// - /shopify/draft  → creates Draft Order with line items (requires env vars)
 //
-// Paste as backend index.js (CommonJS). Railway start: `npm start`.
-// Set env: SCRAPINGBEE_API_KEY
+// Env required for Shopify:
+//   SHOPIFY_SHOP=yourstore.myshopify.com
+//   SHOPIFY_ACCESS_TOKEN=shpat_xxx  (Admin API access token)
+// Optional env for location-based fulfillment later.
 
 const express = require("express");
 const cors = require("cors");
@@ -17,11 +18,11 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 
 app.use(cors());
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "2mb" }));
 
 // ---------- Config & business rules ----------
 const DEFAULT_US_SALES_TAX = 0.06625;
-const DEFAULT_FREIGHT_PER_FT3 = 6.00; // consolidated container assumption
+const DEFAULT_FREIGHT_PER_FT3 = 6.00;
 const CARD_FEE_RATE = 0.0325;
 const DEFAULT_DUTY_UPHOLSTERED = 0.25;
 const DEFAULT_VOLUME_FT3 = 11.33;
@@ -55,13 +56,11 @@ async function fetchWithScrapingBee(url, opts = {}) {
   params.set("country_code", opts.country || "us");
   if (opts.render_js) params.set("render_js", "true");
   if (opts.wait) params.set("wait", String(opts.wait));
-  // Provide realistic headers for sites like Amazon
   const headers = {
     "User-Agent": opts.userAgent || "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/116.0.0.0 Safari/537.36",
     "Accept-Language": opts.acceptLanguage || "en-US,en;q=0.9",
   };
   params.set("custom_headers", JSON.stringify(headers));
-
   const apiUrl = `https://app.scrapingbee.com/api/v1?${params.toString()}`;
   const res = await fetch(apiUrl);
   const html = await res.text();
@@ -79,25 +78,15 @@ function extractJSONLDProduct(document) {
   const scripts = Array.from(document.querySelectorAll('script[type="application/ld+json"]'));
   let best = null;
   for (const s of scripts) {
-    let txt = s.textContent || "";
     try {
-      const json = JSON.parse(txt);
+      const json = JSON.parse(s.textContent || "{}");
       const arr = Array.isArray(json) ? json : [json];
       for (const node of arr) {
         if (!node || typeof node !== "object") continue;
-        // Product node
-        if ((node["@type"] && String(node["@type"]).toLowerCase().includes("product")) || node.productID || node.offers) {
-          // Choose first Product block
-          best = node;
-          break;
-        }
-        // Some sites wrap in "@graph"
+        if ((node["@type"] && String(node["@type"]).toLowerCase().includes("product")) || node.offers) { best = node; break; }
         if (Array.isArray(node["@graph"])) {
           for (const g of node["@graph"]) {
-            if ((g["@type"] && String(g["@type"]).toLowerCase().includes("product")) || g.offers) {
-              best = g;
-              break;
-            }
+            if ((g["@type"] && String(g["@type"]).toLowerCase().includes("product")) || g.offers) { best = g; break; }
           }
         }
       }
@@ -105,7 +94,6 @@ function extractJSONLDProduct(document) {
     } catch {}
   }
   if (!best) return null;
-  // Normalize
   const title = best.name || null;
   const images = [];
   if (best.image) {
@@ -123,27 +111,16 @@ function extractJSONLDProduct(document) {
 }
 
 function pickFirstNonEmpty(...vals) {
-  for (const v of vals) {
-    if (v !== undefined && v !== null && String(v).trim() !== "") return v;
-  }
+  for (const v of vals) if (v !== undefined && v !== null && String(v).trim() !== "") return v;
   return null;
 }
 
 function extractPriceGeneric(document) {
-  // Generic price selectors
   const candidates = [
-    "#priceblock_ourprice",
-    "#priceblock_dealprice",
-    "#price_inside_buybox",
-    "#corePrice_feature_div .a-offscreen",
-    "#corePriceDisplay_desktop_feature_div .a-offscreen",
-    '[data-a-color="price"] .a-offscreen',
-    "[itemprop=price]",
-    "meta[itemprop=price]",
-    "meta[property='product:price:amount']",
-    "[data-test*='price']",
-    "[data-hbkit-price]",
-    ".price, .sale-price, .our-price"
+    "#priceblock_ourprice","#priceblock_dealprice","#price_inside_buybox",
+    "#corePrice_feature_div .a-offscreen","#corePriceDisplay_desktop_feature_div .a-offscreen",
+    "[itemprop=price]","meta[itemprop=price]","meta[property='product:price:amount']",
+    ".price",".sale-price",".our-price","[data-test*='price']","[data-hbkit-price]"
   ];
   for (const sel of candidates) {
     const el = document.querySelector(sel);
@@ -158,7 +135,7 @@ function extractPriceGeneric(document) {
 function extractTitleGeneric(document) {
   const og = document.querySelector("meta[property='og:title']")?.getAttribute("content");
   const h1 = document.querySelector("h1")?.textContent;
-  const prod = document.querySelector("#productTitle")?.textContent; // Amazon
+  const prod = document.querySelector("#productTitle")?.textContent;
   return (pickFirstNonEmpty(prod, og, h1) || "").trim();
 }
 
@@ -171,18 +148,14 @@ function extractImageGeneric(document) {
 }
 
 function extractVariantsGeneric(document) {
-  // Harvest <select> options that look like variant selectors
-  const selects = Array.from(document.querySelectorAll("select"));
   const variants = [];
+  const selects = Array.from(document.querySelectorAll("select"));
   for (const sel of selects) {
     const labelEl = sel.closest("label") || sel.previousElementSibling;
     const nameGuess = (labelEl?.textContent || sel.name || sel.id || "Option").trim();
     const options = Array.from(sel.querySelectorAll("option")).map(o => (o.textContent || "").trim()).filter(Boolean);
-    if (options.length >= 2 && options.length <= 50) {
-      variants.push({ name: nameGuess, options });
-    }
+    if (options.length >= 2 && options.length <= 50) variants.push({ name: nameGuess, options });
   }
-  // Amazon might use swatches without <select> — collect color/size labels
   const twister = document.querySelector("#twister, #variation_color_name, #variation_size_name");
   if (twister) {
     const labels = Array.from(twister.querySelectorAll("label, span.a-size-base"));
@@ -196,74 +169,39 @@ function extractProductFromHTML(html, url) {
   const dom = new JSDOM(html);
   const { document } = dom.window;
 
-  // 1) JSON-LD Product if available
   const ld = extractJSONLDProduct(document);
-
-  // 2) Generic fallbacks + Amazon/Wayfair specific selectors in extractPriceGeneric()
   const title = pickFirstNonEmpty(ld?.title, extractTitleGeneric(document)) || null;
   const image = pickFirstNonEmpty(ld?.images?.[0], extractImageGeneric(document)) || null;
-
-  let price = null, priceRaw = null, currency = ld?.currency || null;
+  let price = null, currency = ld?.currency || null;
   if (ld?.price) price = ld.price;
   if (!price) {
     const p = extractPriceGeneric(document);
-    if (p) { price = p.price; priceRaw = p.raw; }
+    if (p) price = p.price;
   }
-
   const variants = extractVariantsGeneric(document);
 
-  return {
-    title,
-    image,
-    price: isFinite(price) ? Number(price) : null,
-    currency: currency || null,
-    variants
-  };
+  // Vendor hostname
+  let vendor = null;
+  try { vendor = new URL(url).hostname.replace(/^www\./,""); } catch {}
+
+  return { title, image, price: isFinite(price) ? Number(price) : null, currency: currency || null, variants, vendor };
 }
 
 // ---------- Endpoints ----------
 app.get(["/", "/health"], (_req, res) => {
-  res.json({ ok: true, version: "alpha-3-full-ii", calc: "SDL+ScrapingBee+ProductExtract" });
+  res.json({ ok: true, version: "alpha-3-stepper", calc: "SDL+ScrapingBee+ProductExtract+ShopifyDraft" });
 });
 
 app.get("/debug-index", (_req, res) => {
-  res.type("text/plain").send("debug-index ok :: alpha-3-full-ii");
-});
-
-app.post("/scrape", async (req, res) => {
-  try {
-    const { url, render_js = false, wait = 1200 } = req.body || {};
-    if (!url) return res.status(400).json({ ok:false, error:"Missing url" });
-    // Amazon often needs JS + short wait
-    const isAmazon = /(^|\.)amazon\./i.test(url);
-    const opts = { render_js: render_js || isAmazon, wait, country: "us" };
-    const { status, html } = await fetchWithScrapingBee(url, opts);
-    const out = html.length > 300000 ? html.slice(0, 300000) + "\n<!-- trimmed -->" : html;
-    res.json({ ok:true, status, bytes: html.length, html: out });
-  } catch (e) {
-    res.status(500).json({ ok:false, error: String(e.message || e) });
-  }
-});
-
-app.post("/extractPrice", async (req, res) => {
-  try {
-    const { url, render_js = false } = req.body || {};
-    if (!url) return res.status(400).json({ ok:false, error:"Missing url" });
-    const isAmazon = /(^|\.)amazon\./i.test(url);
-    const { html } = await fetchWithScrapingBee(url, { render_js: render_js || isAmazon, wait: 1200 });
-    const product = extractProductFromHTML(html, url);
-    res.json({ ok:true, url, price: product.price || 0, title: product.title, image: product.image });
-  } catch (e) {
-    res.status(500).json({ ok:false, error: String(e.message || e) });
-  }
+  res.type("text/plain").send("debug-index ok :: alpha-3-stepper");
 });
 
 app.post("/extractProduct", async (req, res) => {
   try {
-    const { url, render_js = false } = req.body || {};
+    const { url } = req.body || {};
     if (!url) return res.status(400).json({ ok:false, error:"Missing url" });
     const isAmazon = /(^|\.)amazon\./i.test(url);
-    const { html } = await fetchWithScrapingBee(url, { render_js: render_js || isAmazon, wait: 1200 });
+    const { html } = await fetchWithScrapingBee(url, { render_js: isAmazon, wait: 1200 });
     const product = extractProductFromHTML(html, url);
     res.json({ ok:true, url, ...product });
   } catch (e) {
@@ -280,7 +218,6 @@ app.post("/quote", async (req, res) => {
     const freightPerFt3 = isFinite(body.freightPerFt3) ? Number(body.freightPerFt3) : DEFAULT_FREIGHT_PER_FT3;
     const fixedFeesPerShipment = isFinite(body.fixedFeesPerShipment) ? Number(body.fixedFeesPerShipment) : FIXED_FEES_PER_SHIPMENT;
 
-    // Auto-resolve firstCost via ScrapingBee (with render_js for Amazon) when missing/zero and link present
     const resolved = await Promise.all(items.map(async (it) => {
       const out = { ...it };
       const fc = Number(out.firstCost);
@@ -346,23 +283,12 @@ app.post("/quote", async (req, res) => {
         firstCost,
         volumeFt3,
         image: it._product?.image || null,
+        vendor: it._product?.vendor || (it.link ? new URL(it.link).hostname.replace(/^www\./,"") : null),
         category,
         dutyRate,
         taxExempt,
-        breakdown: {
-          usTax: Number(usTax.toFixed(2)),
-          freight: Number(freight.toFixed(2)),
-          fixedFee: Number(fixedFee.toFixed(2)),
-          duty: Number(duty.toFixed(2)),
-          landedPerUnit: Number(landedPerUnit.toFixed(2)),
-          marginRate,
-          cardFeeRate: CARD_FEE_RATE,
-        },
         retailUnit: Number(retail.toFixed(2)),
         retailTotal: Number(total.toFixed(2)),
-        scraped: Boolean(it._product),
-        scrapeOk: Boolean(it._scrapeOk),
-        scrapeError: it._scrapeError || null,
       };
     });
 
@@ -370,15 +296,64 @@ app.post("/quote", async (req, res) => {
 
     res.json({
       ok: true,
-      version: "alpha-3-full-ii",
-      calc: "SDL+ScrapingBee+ProductExtract",
-      params: { freightPerFt3, fixedFeesPerShipment, usSalesTaxRate: DEFAULT_US_SALES_TAX },
+      version: "alpha-3-stepper",
       totals: { totalFt3: Number(totalFt3.toFixed(2)), grandTotal: Number(grandTotal.toFixed(2)) },
       lines
     });
   } catch (e) {
     console.error(e);
     res.status(500).json({ ok:false, error: "Server error." });
+  }
+});
+
+// ---------- Shopify Draft Order ----------
+app.post("/shopify/draft", async (req, res) => {
+  try {
+    const shop = process.env.SHOPIFY_SHOP;
+    const token = process.env.SHOPIFY_ACCESS_TOKEN;
+    if (!shop || !token) return res.status(500).json({ ok:false, error:"Shopify env vars missing" });
+
+    const { items, customerEmail, note } = req.body || {};
+    if (!Array.isArray(items) || items.length === 0) return res.status(400).json({ ok:false, error:"No items" });
+
+    // Build line_items with custom names and properties (include link & image as properties)
+    const line_items = items.map(it => ({
+      title: it.name || "Special Order — Customer Provided Link",
+      quantity: Number(it.qty) || 1,
+      price: Number(it.unitPrice) || undefined, // Optional; if omitted, Shopify leaves price as 0 for draft until manual set
+      properties: [
+        it.link ? { name: "Source Link", value: it.link } : null,
+        it.image ? { name: "Image", value: it.image } : null,
+        it.vendor ? { name: "Vendor", value: it.vendor } : null,
+      ].filter(Boolean)
+    }));
+
+    const payload = {
+      draft_order: {
+        line_items,
+        email: customerEmail || undefined,
+        tags: "Special Order,Instant Import",
+        note: note || "Instant Import draft order created automatically.",
+        use_customer_default_address: true
+      }
+    };
+
+    const url = `https://${shop}/admin/api/2024-07/draft_orders.json`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: {
+        "X-Shopify-Access-Token": token,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(payload)
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      return res.status(500).json({ ok:false, error:"Shopify error", detail:data });
+    }
+    res.json({ ok:true, draft_order: data.draft_order });
+  } catch (e) {
+    res.status(500).json({ ok:false, error:String(e.message || e) });
   }
 });
 
